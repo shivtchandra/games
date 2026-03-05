@@ -56,15 +56,15 @@ const TRUMP_QUOTES = [
 
 const StraitOfChaos = () => {
     const CONFIG = {
-        GRAVITY: 0.06, BIRD_SIZE: 20, GAME_SPEED_START: 0.8, GAME_SPEED_MAX: 1.8,
-        SPAWN_RATE_START: 240, GAP_SIZE_START: 180, GAP_SIZE_MIN: 140,
-        INTERNAL_WIDTH: 800, INTERNAL_HEIGHT: 600, PARTICLE_LIFE: 30,
+        GRAVITY: 0.18, FLAP_STRENGTH: -3.8, BIRD_SIZE: 20, GAME_SPEED_START: 0.8, GAME_SPEED_MAX: 1.8,
+        SPAWN_RATE_START: 220, GAP_SIZE_START: 170, GAP_SIZE_MIN: 130, MISSILE_GAP_BONUS: 50,
+        INTERNAL_WIDTH: 400, INTERNAL_HEIGHT: 700, PARTICLE_LIFE: 30,
         POWERUP_SIZE: 25, DIFFICULTY_INTERVAL: 900, DIFFICULTY_SPEED_INC: 0.3,
     };
 
     const FACTIONS = {
-        USA: { name: 'USA', emoji: '🦅', color: '#3B82F6', alt: '#1E40AF', gravMult: 1.1, dragMult: 0.97 },
-        IRAN: { name: 'IRAN', emoji: '🕊️', color: '#22C55E', alt: '#15803D', gravMult: 0.9, dragMult: 0.985 },
+        USA: { name: 'USA', emoji: '🦅', color: '#3B82F6', alt: '#1E40AF' },
+        IRAN: { name: 'IRAN', emoji: '🕊️', color: '#22C55E', alt: '#15803D' },
     };
 
     const getEscalationPhase = (s) => {
@@ -102,8 +102,8 @@ const StraitOfChaos = () => {
     const factionRef = useRef(null);
 
     const birdRef = useRef({
-        y: CONFIG.INTERNAL_HEIGHT / 2, x: CONFIG.INTERNAL_WIDTH / 3,
-        velocity: 0, gravityDirection: 1, radius: CONFIG.BIRD_SIZE / 2,
+        y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
+        velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
         shieldActive: false, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0,
         propAngle: 0,
     });
@@ -154,8 +154,8 @@ const StraitOfChaos = () => {
         seededRandomRef.current = createSeededRandom(currentSeedRef.current);
         scoreRef.current = 0;
         birdRef.current = {
-            y: CONFIG.INTERNAL_HEIGHT / 2, x: CONFIG.INTERNAL_WIDTH / 3,
-            velocity: 0, gravityDirection: 1, radius: CONFIG.BIRD_SIZE / 2,
+            y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
+            velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
             shieldActive: false, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
         };
         pipesRef.current = []; powerupsRef.current = []; particlesRef.current = [];
@@ -176,11 +176,10 @@ const StraitOfChaos = () => {
         setGameState('PLAYING');
     }, [resetGame, isChallenge]);
 
-    const flipGravity = useCallback(() => {
+    const flap = useCallback(() => {
         const bird = birdRef.current;
         const f = factionRef.current || FACTIONS.USA;
-        bird.gravityDirection *= -1;
-        bird.velocity = 0;
+        bird.velocity = CONFIG.FLAP_STRENGTH;
         createParticles(bird.x, bird.y, f.color, 5);
     }, []);
 
@@ -238,8 +237,7 @@ const StraitOfChaos = () => {
         let currentSpeed = bird.speedBoostTimer > 0 ? difficultyRef.current.speed * 1.5 : difficultyRef.current.speed;
         if (bird.sanctionSlowTimer > 0) { currentSpeed *= 0.5; bird.sanctionSlowTimer--; }
 
-        bird.velocity += CONFIG.GRAVITY * bird.gravityDirection * f.gravMult;
-        bird.velocity *= f.dragMult;
+        bird.velocity += CONFIG.GRAVITY;
         bird.y += bird.velocity;
         bird.propAngle += 0.3;
 
@@ -259,12 +257,13 @@ const StraitOfChaos = () => {
 
         // Spawn pipes
         if (frameCountRef.current % Math.round(difficultyRef.current.spawnRate) === 0) {
-            const gap = difficultyRef.current.gapSize;
+            const missileGapBonus = missilesRef.current.length > 0 ? CONFIG.MISSILE_GAP_BONUS : 0;
+            const gap = difficultyRef.current.gapSize + missileGapBonus;
             const topH = seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
             const pipeCount = pipesRef.current.filter(p => p.passed).length + pipesRef.current.length;
             const isSanction = (pipeCount + 1) % 5 === 0;
 
-            pipesRef.current.push({ x: CONFIG.INTERNAL_WIDTH, topHeight: topH, bottomY: topH + gap, width: 60, passed: false, isSanction });
+            pipesRef.current.push({ x: CONFIG.INTERNAL_WIDTH, topHeight: topH, bottomY: topH + gap, width: 50, passed: false, isSanction });
 
             if (seededRandomRef.current() < 0.35) {
                 const types = ['PEACE', 'OIL', 'UN'];
@@ -335,30 +334,48 @@ const StraitOfChaos = () => {
         // News ticker scroll
         newsOffsetRef.current += 0.8;
 
-        // Spawn homing missiles (after score 3, every ~300 frames)
-        if (scoreRef.current >= 3 && frameCountRef.current % 280 === 0) {
+        // Spawn homing missiles (after score 3, every ~400 frames, with warning)
+        if (scoreRef.current >= 3 && frameCountRef.current % 380 === 0) {
             const side = seededRandomRef.current() > 0.5 ? 'right' : 'top';
             missilesRef.current.push({
-                x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : seededRandomRange(200, CONFIG.INTERNAL_WIDTH - 100),
+                x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : seededRandomRange(100, CONFIG.INTERNAL_WIDTH - 50),
                 y: side === 'top' ? -20 : seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - 50),
-                vx: 0, vy: 0, speed: 1.2 + scoreRef.current * 0.05,
-                life: 360, trail: [],
+                vx: 0, vy: 0, speed: 1.0 + scoreRef.current * 0.04,
+                life: 300, age: 0, trackingLife: 120, // stops homing after 120 frames (~2 sec)
+                trail: [], warning: 60, // 60 frames of warning before active
             });
         }
 
-        // Update missiles (homing)
+        // Update missiles (homing with burnout + pipe collision)
         for (let i = missilesRef.current.length - 1; i >= 0; i--) {
             const m = missilesRef.current[i];
+
+            // Warning phase — missile blinks but doesn't move yet
+            if (m.warning > 0) { m.warning--; continue; }
+
+            m.age++;
             const dx = bird.x - m.x, dy = bird.y - m.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const ax = (dx / dist) * m.speed * 0.08, ay = (dy / dist) * m.speed * 0.08;
-            m.vx += ax; m.vy += ay;
+
+            // Homing phase: only tracks for first `trackingLife` frames, then flies straight
+            if (m.age <= m.trackingLife) {
+                const turnRate = 0.04; // weaker turning = wider arc = dodgeable
+                const ax = (dx / dist) * m.speed * turnRate;
+                const ay = (dy / dist) * m.speed * turnRate;
+                m.vx += ax; m.vy += ay;
+            }
+            // After burnout, missile keeps its last direction (no more tracking)
+
             const spd = Math.sqrt(m.vx * m.vx + m.vy * m.vy);
             if (spd > m.speed) { m.vx = (m.vx / spd) * m.speed; m.vy = (m.vy / spd) * m.speed; }
+            // Accelerate slightly after burnout for drama
+            if (m.age > m.trackingLife) { m.vx *= 1.005; m.vy *= 1.005; }
+
             m.x += m.vx; m.y += m.vy; m.life--;
             m.trail.push({ x: m.x, y: m.y, life: 15 });
-            if (m.trail.length > 12) m.trail.shift();
+            if (m.trail.length > 14) m.trail.shift();
             m.trail.forEach(t => t.life--);
+
             // Collision with bird
             if (dist < bird.radius + 8) {
                 if (bird.shieldActive) {
@@ -367,6 +384,22 @@ const StraitOfChaos = () => {
                     missilesRef.current.splice(i, 1); continue;
                 } else { gameOver(); return; }
             }
+
+            // Missile crashes into pipes! (gives player a way to trick missiles)
+            let hitPipe = false;
+            for (const pipe of pipesRef.current) {
+                if (m.x > pipe.x && m.x < pipe.x + pipe.width) {
+                    if (m.y < pipe.topHeight || m.y > pipe.bottomY) {
+                        hitPipe = true; break;
+                    }
+                }
+            }
+            if (hitPipe) {
+                createParticles(m.x, m.y, '#FF6600', 20);
+                createParticles(m.x, m.y, '#FFAA00', 10);
+                missilesRef.current.splice(i, 1); continue;
+            }
+
             if (m.life <= 0 || m.x < -50 || m.x > CONFIG.INTERNAL_WIDTH + 50 || m.y < -50 || m.y > CONFIG.INTERNAL_HEIGHT + 50) {
                 createParticles(m.x, m.y, '#FF6600', 8);
                 missilesRef.current.splice(i, 1);
@@ -573,43 +606,50 @@ const StraitOfChaos = () => {
         ctx.beginPath(); ctx.arc(0, 0, 2.5 * s, 0, Math.PI * 2); ctx.fill();
 
         ctx.shadowBlur = 0;
-
-        // Gravity arrow
-        const arrowY = bird.gravityDirection * (bird.radius + 14);
-        ctx.fillStyle = f.color; ctx.beginPath();
-        if (bird.gravityDirection === 1) {
-            ctx.moveTo(-5, arrowY - 5); ctx.lineTo(5, arrowY - 5); ctx.lineTo(0, arrowY + 5);
-        } else {
-            ctx.moveTo(-5, arrowY + 5); ctx.lineTo(5, arrowY + 5); ctx.lineTo(0, arrowY - 5);
-        }
-        ctx.fill(); ctx.restore();
+        ctx.restore();
 
         // --- HOMING MISSILES ---
         missilesRef.current.forEach(m => {
+            // Warning phase — blinking ⚠️ indicator
+            if (m.warning > 0) {
+                if (Math.floor(m.warning / 6) % 2 === 0) {
+                    ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillStyle = '#FF0000';
+                    ctx.fillText('⚠️', m.x, m.y);
+                    ctx.shadowBlur = 20; ctx.shadowColor = '#FF0000';
+                    ctx.strokeStyle = 'rgba(255,0,0,0.5)'; ctx.lineWidth = 1;
+                    ctx.beginPath(); ctx.arc(m.x, m.y, 20, 0, Math.PI * 2); ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+                return;
+            }
             // Trail
+            const isTracking = m.age <= m.trackingLife;
             m.trail.forEach(t => {
                 ctx.globalAlpha = t.life / 15 * 0.5;
-                ctx.fillStyle = '#FF4400';
+                ctx.fillStyle = isTracking ? '#FF4400' : '#FF8800';
                 ctx.beginPath(); ctx.arc(t.x, t.y, 2, 0, Math.PI * 2); ctx.fill();
             });
             ctx.globalAlpha = 1;
             // Missile body
             const angle = Math.atan2(m.vy, m.vx);
             ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(angle);
-            ctx.fillStyle = '#CC0000';
+            ctx.fillStyle = isTracking ? '#CC0000' : '#AA6600';
             ctx.beginPath();
             ctx.moveTo(10, 0); ctx.lineTo(-6, -4); ctx.lineTo(-4, 0); ctx.lineTo(-6, 4);
             ctx.closePath(); ctx.fill();
             // Fins
-            ctx.fillStyle = '#880000';
+            ctx.fillStyle = isTracking ? '#880000' : '#774400';
             ctx.fillRect(-8, -5, 3, 2); ctx.fillRect(-8, 3, 3, 2);
-            // Flame
-            ctx.fillStyle = '#FF8800';
-            ctx.beginPath(); ctx.moveTo(-6, -2); ctx.lineTo(-12 - Math.random() * 4, 0); ctx.lineTo(-6, 2); ctx.fill();
+            // Flame (bigger when tracking)
+            ctx.fillStyle = isTracking ? '#FF8800' : '#FF6600';
+            const flameLen = isTracking ? -12 - Math.random() * 4 : -8 - Math.random() * 2;
+            ctx.beginPath(); ctx.moveTo(-6, -2); ctx.lineTo(flameLen, 0); ctx.lineTo(-6, 2); ctx.fill();
             ctx.restore();
-            // Warning indicator
-            ctx.shadowBlur = 8; ctx.shadowColor = '#FF0000';
-            ctx.strokeStyle = '#FF0000'; ctx.lineWidth = 1;
+            // Ring indicator — red = homing, fading orange = burnout
+            ctx.shadowBlur = 8; ctx.shadowColor = isTracking ? '#FF0000' : '#FF660044';
+            ctx.strokeStyle = isTracking ? '#FF0000' : 'rgba(255,102,0,0.3)';
+            ctx.lineWidth = isTracking ? 1.5 : 0.8;
             ctx.beginPath(); ctx.arc(m.x, m.y, 14, 0, Math.PI * 2); ctx.stroke();
             ctx.shadowBlur = 0;
         });
@@ -674,7 +714,7 @@ const StraitOfChaos = () => {
             ctx.globalAlpha = alpha;
             // Background box
             ctx.fillStyle = 'rgba(0,0,0,0.8)';
-            const qw = 380, qh = 60;
+            const qw = 320, qh = 60;
             const qx = (W - qw) / 2, qy = H / 2 - 80;
             ctx.fillRect(qx, qy, qw, qh);
             ctx.strokeStyle = '#F59E0B'; ctx.lineWidth = 2;
@@ -717,17 +757,17 @@ const StraitOfChaos = () => {
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (gameStateRef.current === 'START' && factionRef.current) startGame();
-                else if (gameStateRef.current === 'PLAYING') flipGravity();
+                else if (gameStateRef.current === 'PLAYING') flap();
             }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [startGame, flipGravity]);
+    }, [startGame, flap]);
 
     const handleCanvasInteraction = (e) => {
         e.preventDefault();
         if (gameState === 'PLAYING') {
-            flipGravity();
+            flap();
             const cx = e.touches ? e.touches[0].clientX : e.clientX;
             const cy = e.touches ? e.touches[0].clientY : e.clientY;
             addTouchRipple(cx, cy);
@@ -754,7 +794,7 @@ const StraitOfChaos = () => {
     const phase = getEscalationPhase(score);
 
     return (
-        <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden', position: 'relative', touchAction: 'manipulation', userSelect: 'none' }}>
+        <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden', position: 'relative', touchAction: 'none', userSelect: 'none' }}>
             <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@400;600&family=Black+Ops+One&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -841,14 +881,14 @@ const StraitOfChaos = () => {
                                 <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(12px,3vw,15px)', marginBottom: '8px', textAlign: 'center' }}>🎮 HOW TO PLAY</p>
 
                                 <p style={{ fontSize: 'clamp(10px,2.5vw,13px)', marginBottom: '6px' }}>
-                                    <span className="hl">SPACE</span> or <span className="hl">TAP</span> to flip gravity — your drone switches between falling down and floating up.
+                                    <span className="hl">SPACE</span> or <span className="hl">TAP</span> to flap — your drone flies upward with each tap. Release to fall.
                                 </p>
 
                                 <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(11px,2.8vw,14px)', marginBottom: '4px', marginTop: '10px' }}>⚠️ THREATS</p>
                                 <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr', gap: '4px 8px', fontSize: 'clamp(9px,2.2vw,12px)', marginBottom: '8px' }}>
                                     <span>🏢</span><span style={{ color: '#ccc' }}><strong style={{ color: '#EF4444' }}>Missile Towers</strong> — dodge between them or die</span>
                                     <span>💰</span><span style={{ color: '#ccc' }}><strong style={{ color: '#F59E0B' }}>Sanctions Barriers</strong> — golden walls that slow you (survivable!)</span>
-                                    <span>🚀</span><span style={{ color: '#ccc' }}><strong style={{ color: '#FF4444' }}>Homing Missiles</strong> — chase your drone! Appear at score 3+</span>
+                                    <span>🚀</span><span style={{ color: '#ccc' }}><strong style={{ color: '#FF4444' }}>Homing Missiles</strong> — track you for 2 sec then fly straight. Trick them into towers! Score 3+</span>
                                     <span>🏴‍☠️</span><span style={{ color: '#ccc' }}><strong style={{ color: '#8B4513' }}>Pirate Ships</strong> — rogue vessels that bob around. Appear at score 7+</span>
                                 </div>
 
