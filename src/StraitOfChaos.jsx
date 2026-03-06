@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import warzoneSkyline from './assets/warzone_skyline.png';
 import missileTower from './assets/missile_tower.png';
 import failSoundUrl from './assets/fahhhhh.mp3';
+import bgmUrl from './assets/hyperbaiter_bgm.webm';
 
 function createSeededRandom(seed) {
     let s = seed;
@@ -89,6 +90,10 @@ const StraitOfChaos = () => {
     const [showShareModal, setShowShareModal] = useState(false);
     const [copied, setCopied] = useState(false);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+    const [soundEnabled, setSoundEnabled] = useState(() => {
+        const s = localStorage.getItem('straitChaosSoundOn');
+        return s !== null ? s === 'true' : true;
+    });
 
     const canvasRef = useRef(null);
     const requestRef = useRef(null);
@@ -116,9 +121,22 @@ const StraitOfChaos = () => {
     const piratesRef = useRef([]);
     const trumpQuoteRef = useRef({ text: '', timer: 0 });
     const failSoundRef = useRef(null);
+    const bgmRef = useRef(null);
+    const soundEnabledRef = useRef(soundEnabled);
     const difficultyRef = useRef({ speed: CONFIG.GAME_SPEED_START, spawnRate: CONFIG.SPAWN_RATE_START, gapSize: CONFIG.GAP_SIZE_START });
     const bgImageRef = useRef(null);
     const towerImageRef = useRef(null);
+    // Streak & stats refs
+    const streakRef = useRef(0);
+    const bestStreakRef = useRef(0);
+    const nearMissCountRef = useRef(0);
+    const missilesDodgedRef = useRef(0);
+    const comboTextRef = useRef({ text: '', timer: 0 });
+    const nearMissTextRef = useRef({ timer: 0, x: 0, y: 0 });
+    // Abilities
+    const barrelRollRef = useRef({ active: false, timer: 0, cooldown: 0, angle: 0 });
+    const empRef = useRef({ charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0 });
+    const touchStartRef = useRef({ y: 0, time: 0 });
 
     const updateCanvasSize = useCallback(() => {
         const maxW = window.innerWidth, maxH = window.innerHeight;
@@ -139,7 +157,19 @@ const StraitOfChaos = () => {
         const tw = new Image(); tw.src = missileTower; tw.onload = () => { towerImageRef.current = tw; };
         failSoundRef.current = new Audio(failSoundUrl);
         failSoundRef.current.volume = 0.7;
+        // Background music
+        const bgm = new Audio(bgmUrl);
+        bgm.loop = true; bgm.volume = 0.3;
+        bgmRef.current = bgm;
     }, []);
+
+    // Sync soundEnabled state to ref and audio elements
+    useEffect(() => {
+        soundEnabledRef.current = soundEnabled;
+        localStorage.setItem('straitChaosSoundOn', String(soundEnabled));
+        if (bgmRef.current) bgmRef.current.muted = !soundEnabled;
+        if (failSoundRef.current) failSoundRef.current.muted = !soundEnabled;
+    }, [soundEnabled]);
 
     const seededRandomRange = (min, max) => seededRandomRef.current() * (max - min) + min;
 
@@ -166,6 +196,13 @@ const StraitOfChaos = () => {
         newsOffsetRef.current = 0;
         activeHeadlinesRef.current = [NEWS_HEADLINES[0], NEWS_HEADLINES[1], NEWS_HEADLINES[2]];
         lastHeadlineIdxRef.current = 2;
+        // Reset stats
+        streakRef.current = 0; bestStreakRef.current = 0;
+        nearMissCountRef.current = 0; missilesDodgedRef.current = 0;
+        comboTextRef.current = { text: '', timer: 0 };
+        nearMissTextRef.current = { timer: 0, x: 0, y: 0 };
+        barrelRollRef.current = { active: false, timer: 0, cooldown: 0, angle: 0 };
+        empRef.current = { charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0 };
         setScore(0); setShowShareModal(false); setCopied(false); setGameState('START');
     }, [isChallenge]);
 
@@ -173,6 +210,8 @@ const StraitOfChaos = () => {
         if (!factionRef.current) return;
         resetGame();
         if (!isChallenge) { currentSeedRef.current = generateSeed(); seededRandomRef.current = createSeededRandom(currentSeedRef.current); }
+        // Start background music
+        if (bgmRef.current) { bgmRef.current.currentTime = 0; bgmRef.current.volume = 0.3; bgmRef.current.play().catch(() => { }); }
         setGameState('PLAYING');
     }, [resetGame, isChallenge]);
 
@@ -181,6 +220,33 @@ const StraitOfChaos = () => {
         const f = factionRef.current || FACTIONS.USA;
         bird.velocity = CONFIG.FLAP_STRENGTH;
         createParticles(bird.x, bird.y, f.color, 5);
+    }, []);
+
+    const triggerBarrelRoll = useCallback(() => {
+        const br = barrelRollRef.current;
+        if (br.cooldown > 0 || br.active) return;
+        br.active = true;
+        br.timer = 24; // ~0.4 seconds at 60fps
+        br.cooldown = 240; // ~4 seconds
+        br.angle = 0;
+        createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 10);
+    }, []);
+
+    const triggerEMP = useCallback(() => {
+        const emp = empRef.current;
+        if (emp.charge < emp.maxCharge) return;
+        emp.charge = 0;
+        emp.blastTimer = 30;
+        emp.blastX = birdRef.current.x;
+        emp.blastY = birdRef.current.y;
+        // Destroy all missiles
+        missilesRef.current.forEach(m => {
+            createParticles(m.x, m.y, '#00FFFF', 15);
+            createParticles(m.x, m.y, '#FF4400', 8);
+            missilesDodgedRef.current++;
+        });
+        missilesRef.current = [];
+        createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 25);
     }, []);
 
     const addTouchRipple = (cx, cy) => {
@@ -210,6 +276,10 @@ const StraitOfChaos = () => {
         const fs = scoreRef.current;
         setScore(fs);
         if (fs > highScore) { setHighScore(fs); localStorage.setItem('straitChaosHighScore', String(fs)); }
+        // Save best streak
+        if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
+        // Lower music volume
+        if (bgmRef.current) bgmRef.current.volume = 0.08;
         // Play failure sound
         if (failSoundRef.current) {
             failSoundRef.current.currentTime = 0;
@@ -241,10 +311,19 @@ const StraitOfChaos = () => {
         bird.y += bird.velocity;
         bird.propAngle += 0.3;
 
+        // Barrel roll timer
+        const br = barrelRollRef.current;
+        if (br.active) { br.timer--; br.angle += Math.PI / 6; if (br.timer <= 0) br.active = false; }
+        if (br.cooldown > 0) br.cooldown--;
+        const isInvincible = br.active;
+
         const hitTop = bird.y - bird.radius < 0;
         const hitBottom = bird.y + bird.radius > CONFIG.INTERNAL_HEIGHT;
         if (hitTop || hitBottom) {
-            if (bird.shieldActive) {
+            if (isInvincible) {
+                bird.velocity *= -0.5;
+                bird.y = hitTop ? bird.radius + 1 : CONFIG.INTERNAL_HEIGHT - bird.radius - 1;
+            } else if (bird.shieldActive) {
                 bird.shieldActive = false; bird.velocity *= -0.5;
                 bird.y = hitTop ? bird.radius + 1 : CONFIG.INTERNAL_HEIGHT - bird.radius - 1;
                 createParticles(bird.x, bird.y, '#FFFFFF', 15);
@@ -255,7 +334,7 @@ const StraitOfChaos = () => {
         if (bird.shrinkTimer > 0) { bird.shrinkTimer--; bird.radius = (CONFIG.BIRD_SIZE / 2) * 0.6; }
         else bird.radius = CONFIG.BIRD_SIZE / 2;
 
-        // Spawn pipes
+        // Spawn pipes — randomized patterns
         if (frameCountRef.current % Math.round(difficultyRef.current.spawnRate) === 0) {
             const missileGapBonus = missilesRef.current.length > 0 ? CONFIG.MISSILE_GAP_BONUS : 0;
             const gap = difficultyRef.current.gapSize + missileGapBonus;
@@ -263,12 +342,47 @@ const StraitOfChaos = () => {
             const pipeCount = pipesRef.current.filter(p => p.passed).length + pipesRef.current.length;
             const isSanction = (pipeCount + 1) % 5 === 0;
 
-            pipesRef.current.push({ x: CONFIG.INTERNAL_WIDTH, topHeight: topH, bottomY: topH + gap, width: 50, passed: false, isSanction });
+            // Pick pattern based on score (more variety at higher scores)
+            const roll = seededRandomRef.current();
+            const sc = scoreRef.current;
+            let pattern = 'normal';
+            if (sc >= 10 && roll < 0.12) pattern = 'moving';
+            else if (sc >= 7 && roll < 0.24) pattern = 'staggered';
+            else if (sc >= 3 && roll < 0.38) pattern = 'one_sided';
+            else if (roll < 0.52) pattern = 'narrow';
+            else if (roll < 0.64) pattern = 'wide';
+
+            const pipeW = pattern === 'narrow' ? 35 : pattern === 'wide' ? 70 : 50;
+            const pipeGap = pattern === 'narrow' ? gap + 20 : gap;
+            const adjTopH = pattern === 'narrow' ? seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - pipeGap - 50) : topH;
+            const adjBottomY = adjTopH + pipeGap;
+
+            // One-sided: only top or bottom
+            const oneSide = pattern === 'one_sided' ? (seededRandomRef.current() > 0.5 ? 'top' : 'bottom') : null;
+
+            pipesRef.current.push({
+                x: CONFIG.INTERNAL_WIDTH, topHeight: oneSide === 'bottom' ? 0 : adjTopH,
+                bottomY: oneSide === 'top' ? CONFIG.INTERNAL_HEIGHT : adjBottomY,
+                width: pipeW, passed: false, isSanction, pattern,
+                movingDir: pattern === 'moving' ? (seededRandomRef.current() > 0.5 ? 1 : -1) : 0,
+                movingSpeed: pattern === 'moving' ? 0.3 + seededRandomRef.current() * 0.3 : 0,
+                oneSide,
+            });
+
+            // Staggered double: add a second pipe nearby with offset gap
+            if (pattern === 'staggered') {
+                const topH2 = seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
+                pipesRef.current.push({
+                    x: CONFIG.INTERNAL_WIDTH + 80, topHeight: topH2, bottomY: topH2 + gap,
+                    width: 50, passed: false, isSanction: false, pattern: 'normal',
+                    movingDir: 0, movingSpeed: 0, oneSide: null,
+                });
+            }
 
             if (seededRandomRef.current() < 0.35) {
                 const types = ['PEACE', 'OIL', 'UN'];
                 const type = types[Math.floor(seededRandomRef.current() * types.length)];
-                const py = topH + gap / 2;
+                const py = adjTopH + pipeGap / 2;
                 powerupsRef.current.push({ x: CONFIG.INTERNAL_WIDTH + 30, y: py, type, active: true, baseY: py, offset: seededRandomRef.current() * Math.PI * 2 });
             }
         }
@@ -277,33 +391,64 @@ const StraitOfChaos = () => {
         for (let i = pipesRef.current.length - 1; i >= 0; i--) {
             const pipe = pipesRef.current[i];
             pipe.x -= currentSpeed;
+
+            // Moving gap: shift topHeight/bottomY
+            if (pipe.movingDir !== 0) {
+                const gapSize = pipe.bottomY - pipe.topHeight;
+                pipe.topHeight += pipe.movingSpeed * pipe.movingDir;
+                pipe.bottomY = pipe.topHeight + gapSize;
+                if (pipe.topHeight < 30 || pipe.bottomY > CONFIG.INTERNAL_HEIGHT - 30) {
+                    pipe.movingDir *= -1;
+                }
+            }
+
             const bL = bird.x - bird.radius, bR = bird.x + bird.radius, bT = bird.y - bird.radius, bB = bird.y + bird.radius;
             const pL = pipe.x, pR = pipe.x + pipe.width;
-            const hitT = bR > pL && bL < pR && bT < pipe.topHeight;
-            const hitB = bR > pL && bL < pR && bB > pipe.bottomY;
+            const hitT = pipe.topHeight > 0 && bR > pL && bL < pR && bT < pipe.topHeight;
+            const hitB = pipe.bottomY < CONFIG.INTERNAL_HEIGHT && bR > pL && bL < pR && bB > pipe.bottomY;
 
             if (hitT || hitB) {
-                if (pipe.isSanction) {
+                if (isInvincible) {
+                    // Barrel roll: phase through
+                    createParticles(bird.x, bird.y, '#00FFFF', 5);
+                } else if (pipe.isSanction) {
                     bird.sanctionSlowTimer = 90;
                     createParticles(bird.x, bird.y, '#F59E0B', 8);
                     pipesRef.current.splice(i, 1);
                     if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
-                    // Inject score headline
+                    streakRef.current = Math.max(0, streakRef.current - 1);
                     if (SCORE_HEADLINES[scoreRef.current]) {
                         activeHeadlinesRef.current.push(SCORE_HEADLINES[scoreRef.current]);
                     }
                     continue;
-                }
-                if (bird.shieldActive) {
+                } else if (bird.shieldActive) {
                     bird.shieldActive = false; pipesRef.current.splice(i, 1);
+                    streakRef.current = 0;
                     createParticles(bird.x, bird.y, '#FFFFFF', 20); continue;
+                } else {
+                    gameOver(); return;
                 }
-                gameOver(); return;
             }
 
             if (!pipe.passed && bL > pR) {
                 pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                // Streak
+                streakRef.current++;
+                if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
+                if (streakRef.current >= 15) comboTextRef.current = { text: `${streakRef.current}x UNSTOPPABLE! 💀🔥`, timer: 60 };
+                else if (streakRef.current >= 10) comboTextRef.current = { text: `${streakRef.current}x ON FIRE! 🔥🔥`, timer: 50 };
+                else if (streakRef.current >= 5) comboTextRef.current = { text: `${streakRef.current}x STREAK 🔥`, timer: 40 };
                 if (SCORE_HEADLINES[scoreRef.current]) activeHeadlinesRef.current.push(SCORE_HEADLINES[scoreRef.current]);
+                // EMP charge
+                if (empRef.current.charge < empRef.current.maxCharge) empRef.current.charge++;
+                // Near-miss detection (within 8px of pipe edge)
+                const nearTop = pipe.topHeight > 0 && Math.abs(bT - pipe.topHeight) < 8;
+                const nearBot = pipe.bottomY < CONFIG.INTERNAL_HEIGHT && Math.abs(bB - pipe.bottomY) < 8;
+                if (nearTop || nearBot) {
+                    nearMissCountRef.current++;
+                    nearMissTextRef.current = { timer: 40, x: bird.x, y: bird.y - 25 };
+                    createParticles(bird.x, bird.y, '#FFD700', 12);
+                }
             }
             if (pipe.x + pipe.width < 0) pipesRef.current.splice(i, 1);
         }
@@ -378,7 +523,12 @@ const StraitOfChaos = () => {
 
             // Collision with bird
             if (dist < bird.radius + 8) {
-                if (bird.shieldActive) {
+                if (isInvincible) {
+                    // Barrel roll: dodge missile
+                    createParticles(m.x, m.y, '#00FFFF', 12);
+                    missilesDodgedRef.current++;
+                    missilesRef.current.splice(i, 1); continue;
+                } else if (bird.shieldActive) {
                     bird.shieldActive = false;
                     createParticles(m.x, m.y, '#FF4444', 15);
                     missilesRef.current.splice(i, 1); continue;
@@ -397,11 +547,13 @@ const StraitOfChaos = () => {
             if (hitPipe) {
                 createParticles(m.x, m.y, '#FF6600', 20);
                 createParticles(m.x, m.y, '#FFAA00', 10);
+                missilesDodgedRef.current++;
                 missilesRef.current.splice(i, 1); continue;
             }
 
             if (m.life <= 0 || m.x < -50 || m.x > CONFIG.INTERNAL_WIDTH + 50 || m.y < -50 || m.y > CONFIG.INTERNAL_HEIGHT + 50) {
                 createParticles(m.x, m.y, '#FF6600', 8);
+                missilesDodgedRef.current++;
                 missilesRef.current.splice(i, 1);
             }
         }
@@ -426,7 +578,10 @@ const StraitOfChaos = () => {
             // Collision
             const dx = bird.x - p.x, dy = bird.y - p.y;
             if (Math.abs(dx) < p.width / 2 + bird.radius && Math.abs(dy) < p.height / 2 + bird.radius) {
-                if (bird.shieldActive) {
+                if (isInvincible) {
+                    createParticles(p.x, p.y, '#00FFFF', 10);
+                    piratesRef.current.splice(i, 1); continue;
+                } else if (bird.shieldActive) {
                     bird.shieldActive = false;
                     createParticles(p.x, p.y, '#8B4513', 15);
                     piratesRef.current.splice(i, 1); continue;
@@ -437,6 +592,11 @@ const StraitOfChaos = () => {
 
         // Trump quote timer
         if (trumpQuoteRef.current.timer > 0) trumpQuoteRef.current.timer--;
+        // Combo & near-miss timers
+        if (comboTextRef.current.timer > 0) comboTextRef.current.timer--;
+        if (nearMissTextRef.current.timer > 0) nearMissTextRef.current.timer--;
+        // EMP blast timer
+        if (empRef.current.blastTimer > 0) empRef.current.blastTimer--;
     }, [gameOver]);
 
     // --- DRAW ---
@@ -532,6 +692,14 @@ const StraitOfChaos = () => {
         // Tilt based on velocity
         const tilt = Math.max(-0.3, Math.min(0.3, bird.velocity * 0.05));
         ctx.rotate(tilt);
+        // Barrel roll spin
+        const brDraw = barrelRollRef.current;
+        if (brDraw.active) {
+            ctx.rotate(brDraw.angle);
+            // Cyan glow during roll
+            ctx.shadowBlur = 25; ctx.shadowColor = '#00FFFF';
+            ctx.globalAlpha = 0.7 + Math.sin(frameCountRef.current * 0.8) * 0.3;
+        }
 
         // Shield bubble
         if (bird.shieldActive) {
@@ -606,7 +774,59 @@ const StraitOfChaos = () => {
         ctx.beginPath(); ctx.arc(0, 0, 2.5 * s, 0, Math.PI * 2); ctx.fill();
 
         ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
         ctx.restore();
+
+        // --- BARREL ROLL COOLDOWN RING ---
+        if (barrelRollRef.current.cooldown > 0 && !barrelRollRef.current.active) {
+            const cdPct = 1 - barrelRollRef.current.cooldown / 240;
+            ctx.strokeStyle = '#00FFFF'; ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.arc(bird.x, bird.y, bird.radius + 18, -Math.PI / 2, -Math.PI / 2 + cdPct * Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        } else if (barrelRollRef.current.cooldown <= 0 && !barrelRollRef.current.active) {
+            // Ready indicator — subtle pulse
+            const pulse = Math.sin(frameCountRef.current * 0.1) * 0.2 + 0.3;
+            ctx.strokeStyle = '#00FFFF'; ctx.lineWidth = 1;
+            ctx.globalAlpha = pulse;
+            ctx.beginPath(); ctx.arc(bird.x, bird.y, bird.radius + 18, 0, Math.PI * 2); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        // --- EMP CHARGE METER (bottom-right) ---
+        const empD = empRef.current;
+        const empBarW = 60, empBarH = 8;
+        const empX = W - empBarW - 12, empY = H - 44;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(empX - 2, empY - 2, empBarW + 4, empBarH + 4);
+        ctx.fillStyle = '#333';
+        ctx.fillRect(empX, empY, empBarW, empBarH);
+        const empPct = empD.charge / empD.maxCharge;
+        const empColor = empPct >= 1 ? '#00FFFF' : '#0088AA';
+        ctx.fillStyle = empColor;
+        ctx.fillRect(empX, empY, empBarW * empPct, empBarH);
+        if (empPct >= 1) {
+            ctx.shadowBlur = 8; ctx.shadowColor = '#00FFFF';
+            ctx.fillRect(empX, empY, empBarW, empBarH);
+            ctx.shadowBlur = 0;
+        }
+        ctx.font = '8px "Orbitron", monospace'; ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillText(empPct >= 1 ? '⚡ EMP READY' : `⚡ ${empD.charge}/${empD.maxCharge}`, empX + empBarW / 2, empY - 4);
+
+        // --- EMP SHOCKWAVE ---
+        if (empD.blastTimer > 0) {
+            const progress = 1 - empD.blastTimer / 30;
+            const radius = progress * 200;
+            ctx.globalAlpha = 1 - progress;
+            ctx.strokeStyle = '#00FFFF'; ctx.lineWidth = 3 - progress * 2;
+            ctx.beginPath(); ctx.arc(empD.blastX, empD.blastY, radius, 0, Math.PI * 2); ctx.stroke();
+            ctx.strokeStyle = 'rgba(0,255,255,0.3)'; ctx.lineWidth = 8 - progress * 7;
+            ctx.beginPath(); ctx.arc(empD.blastX, empD.blastY, radius * 0.7, 0, Math.PI * 2); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
 
         // --- HOMING MISSILES ---
         missilesRef.current.forEach(m => {
@@ -707,6 +927,51 @@ const StraitOfChaos = () => {
         ctx.textAlign = 'right'; ctx.textBaseline = 'top';
         ctx.fillText('◆ ' + phase.name, W - 12, 10);
 
+        // --- STREAK FIRE EFFECT ---
+        if (streakRef.current >= 5) {
+            const intensity = Math.min(1, streakRef.current / 20);
+            const bird = birdRef.current;
+            // Fire particles behind drone
+            for (let j = 0; j < Math.floor(intensity * 4); j++) {
+                ctx.globalAlpha = 0.4 + Math.random() * 0.4;
+                ctx.fillStyle = ['#FF4400', '#FF8800', '#FFCC00'][Math.floor(Math.random() * 3)];
+                ctx.beginPath();
+                ctx.arc(bird.x - 15 - Math.random() * 20, bird.y + (Math.random() - 0.5) * 12, 2 + Math.random() * 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            // Streak counter under score
+            ctx.font = 'bold 11px "Orbitron", monospace';
+            ctx.fillStyle = streakRef.current >= 15 ? '#FF0000' : streakRef.current >= 10 ? '#FF4400' : '#FF8800';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+            ctx.fillText(`🔥 ${streakRef.current}x`, W / 2, 46);
+        }
+
+        // --- COMBO TEXT POPUP ---
+        if (comboTextRef.current.timer > 0) {
+            const ct = comboTextRef.current;
+            const a = Math.min(1, ct.timer / 15);
+            const scale = 1 + (1 - ct.timer / 60) * 0.3;
+            ctx.globalAlpha = a;
+            ctx.font = `bold ${Math.floor(16 * scale)}px "Orbitron", monospace`;
+            ctx.fillStyle = '#FFD700'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.shadowBlur = 10; ctx.shadowColor = '#FF4400';
+            ctx.fillText(ct.text, W / 2, 80);
+            ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        }
+
+        // --- NEAR-MISS FLASH ---
+        if (nearMissTextRef.current.timer > 0) {
+            const nm = nearMissTextRef.current;
+            const a = Math.min(1, nm.timer / 10);
+            ctx.globalAlpha = a;
+            ctx.font = 'bold 12px "Inter", sans-serif';
+            ctx.fillStyle = '#FFD700'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.shadowBlur = 8; ctx.shadowColor = '#FFD700';
+            ctx.fillText('💀 CLOSE CALL!', nm.x, nm.y - (40 - nm.timer));
+            ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        }
+
         // Trump quote overlay
         if (trumpQuoteRef.current.timer > 0) {
             const qt = trumpQuoteRef.current;
@@ -759,10 +1024,18 @@ const StraitOfChaos = () => {
                 if (gameStateRef.current === 'START' && factionRef.current) startGame();
                 else if (gameStateRef.current === 'PLAYING') flap();
             }
+            if (e.code === 'KeyS' && gameStateRef.current === 'PLAYING') {
+                e.preventDefault();
+                triggerBarrelRoll();
+            }
+            if (e.code === 'KeyE' && gameStateRef.current === 'PLAYING') {
+                e.preventDefault();
+                triggerEMP();
+            }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [startGame, flap]);
+    }, [startGame, flap, triggerBarrelRoll, triggerEMP]);
 
     const handleCanvasInteraction = (e) => {
         e.preventDefault();
@@ -771,6 +1044,23 @@ const StraitOfChaos = () => {
             const cx = e.touches ? e.touches[0].clientX : e.clientX;
             const cy = e.touches ? e.touches[0].clientY : e.clientY;
             addTouchRipple(cx, cy);
+            // Track touch start for swipe
+            if (e.touches) {
+                touchStartRef.current = { y: cy, time: Date.now() };
+            }
+        }
+    };
+
+    const handleTouchEnd = (e) => {
+        if (gameState !== 'PLAYING') return;
+        const endY = e.changedTouches?.[0]?.clientY;
+        if (endY && touchStartRef.current.y) {
+            const dy = endY - touchStartRef.current.y;
+            const dt = Date.now() - touchStartRef.current.time;
+            // Swipe down: >50px within 300ms
+            if (dy > 50 && dt < 300) {
+                triggerBarrelRoll();
+            }
         }
     };
 
@@ -838,82 +1128,101 @@ const StraitOfChaos = () => {
         .soc-challenge-banner .ts { font-family: 'Orbitron', monospace; font-size: clamp(18px,5vw,28px); font-weight: 900; color: #EF4444; text-shadow: 0 0 10px rgba(239,68,68,0.5); }
         .soc-tagline { font-family: 'Inter', sans-serif; font-size: clamp(9px,2.2vw,12px); color: #F59E0B; font-style: italic; letter-spacing: 0.5px; }
         @media (max-width: 480px) { .soc-wrap { border: none; border-radius: 0; } }
+        .soc-sound-btn { position: absolute; top: 10px; left: 10px; z-index: 20; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #fff; transition: background 0.2s; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+        .soc-sound-btn:hover { background: rgba(255,255,255,0.15); }
+        .soc-stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 8px 0; }
+        .soc-stat { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 4px; text-align: center; }
+        .soc-stat-val { font-family: 'Orbitron', monospace; font-weight: 700; font-size: clamp(14px,3.5vw,20px); color: #fff; }
+        .soc-stat-lbl { font-family: 'Inter', sans-serif; font-size: clamp(8px,2vw,10px); color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
       `}</style>
 
             <div className="soc-wrap">
                 <canvas ref={canvasRef} width={CONFIG.INTERNAL_WIDTH} height={CONFIG.INTERNAL_HEIGHT}
-                    onClick={handleCanvasInteraction} onTouchStart={handleCanvasInteraction} />
+                    onClick={handleCanvasInteraction} onTouchStart={handleCanvasInteraction} onTouchEnd={handleTouchEnd} />
+
+                {/* Sound Toggle */}
+                <div className="soc-sound-btn" onClick={(e) => { e.stopPropagation(); setSoundEnabled(v => !v); }}>
+                    {soundEnabled ? '🔊' : '🔇'}
+                </div>
 
                 {gameState === 'PLAYING' && <div className="soc-score">{score}</div>}
 
+                {/* Mobile Ability Buttons */}
+                {gameState === 'PLAYING' && (
+                    <>
+                        <div onClick={(e) => { e.stopPropagation(); triggerBarrelRoll(); }} style={{
+                            position: 'absolute', bottom: '50px', left: '14px', zIndex: 20, width: '52px', height: '52px',
+                            borderRadius: '50%', background: barrelRollRef.current.cooldown > 0 ? 'rgba(0,0,0,0.4)' : 'rgba(0,255,255,0.15)',
+                            border: `2px solid ${barrelRollRef.current.cooldown > 0 ? 'rgba(100,100,100,0.4)' : 'rgba(0,255,255,0.6)'}`,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                            fontSize: '22px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
+                            boxShadow: barrelRollRef.current.cooldown <= 0 ? '0 0 12px rgba(0,255,255,0.3)' : 'none',
+                        }}>
+                            🔄
+                        </div>
+                        <div onClick={(e) => { e.stopPropagation(); triggerEMP(); }} style={{
+                            position: 'absolute', bottom: '50px', right: '14px', zIndex: 20, width: '52px', height: '52px',
+                            borderRadius: '50%', background: empRef.current.charge >= empRef.current.maxCharge ? 'rgba(0,255,255,0.2)' : 'rgba(0,0,0,0.4)',
+                            border: `2px solid ${empRef.current.charge >= empRef.current.maxCharge ? 'rgba(0,255,255,0.7)' : 'rgba(100,100,100,0.3)'}`,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                            fontSize: '22px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
+                            boxShadow: empRef.current.charge >= empRef.current.maxCharge ? '0 0 15px rgba(0,255,255,0.4)' : 'none',
+                            opacity: empRef.current.charge >= empRef.current.maxCharge ? 1 : 0.5,
+                        }}>
+                            ⚡
+                        </div>
+                    </>
+                )}
+
                 {gameState === 'START' && (
                     <div className="soc-overlay">
-                        <div className="soc-screen" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
-                            <h1>Strait of Chaos</h1>
-                            <p className="soc-tagline">Navigate the world's most dangerous strait. Diplomacy is dead.</p>
+                        <div className="soc-screen" style={{ padding: 'clamp(12px,3vw,24px) clamp(10px,2.5vw,20px)' }}>
+                            <h1 style={{ marginBottom: '2px' }}>Strait of Chaos</h1>
+                            <p className="soc-tagline" style={{ marginBottom: 'clamp(6px,1.5vw,10px)' }}>Navigate the world's most dangerous strait.</p>
 
                             {isChallenge && challengeScore.current !== null && (
-                                <div className="soc-challenge-banner">
-                                    <p>🎯 Diplomatic Challenge</p>
-                                    <p>Beat this score:</p>
-                                    <div className="ts">{challengeScore.current}</div>
+                                <div className="soc-challenge-banner" style={{ marginBottom: '8px', padding: '6px' }}>
+                                    <p>🎯 Beat this score: <span className="ts" style={{ fontSize: 'clamp(16px,4vw,24px)' }}>{challengeScore.current}</span></p>
                                 </div>
                             )}
 
-                            <p style={{ marginTop: '8px' }}>Choose your <span className="hl">faction</span></p>
-                            <div className="soc-faction-row">
-                                <div className={`soc-faction ${faction === 'USA' ? 'active-usa' : ''}`} onClick={() => selectFaction('USA')}>
-                                    <span className="soc-faction-emoji">🦅</span>
+                            <p style={{ marginBottom: '4px', fontSize: 'clamp(10px,2.5vw,12px)' }}>Choose your <span className="hl">faction</span></p>
+                            <div className="soc-faction-row" style={{ marginBottom: 'clamp(6px,1.5vw,10px)' }}>
+                                <div className={`soc-faction ${faction === 'USA' ? 'active-usa' : ''}`} onClick={() => selectFaction('USA')} style={{ padding: 'clamp(8px,2vw,12px) clamp(10px,2.5vw,18px)' }}>
+                                    <span className="soc-faction-emoji" style={{ fontSize: 'clamp(20px,5vw,32px)', marginBottom: '2px' }}>🦅</span>
                                     <div className="soc-faction-name">USA</div>
-                                    <div className="soc-faction-desc">Heavy & Powerful</div>
                                 </div>
-                                <div className={`soc-faction ${faction === 'IRAN' ? 'active-iran' : ''}`} onClick={() => selectFaction('IRAN')}>
-                                    <span className="soc-faction-emoji">🕊️</span>
+                                <div className={`soc-faction ${faction === 'IRAN' ? 'active-iran' : ''}`} onClick={() => selectFaction('IRAN')} style={{ padding: 'clamp(8px,2vw,12px) clamp(10px,2.5vw,18px)' }}>
+                                    <span className="soc-faction-emoji" style={{ fontSize: 'clamp(20px,5vw,32px)', marginBottom: '2px' }}>🕊️</span>
                                     <div className="soc-faction-name">IRAN</div>
-                                    <div className="soc-faction-desc">Light & Agile</div>
                                 </div>
                             </div>
 
-                            <div className="soc-divider" />
+                            <div className="soc-divider" style={{ margin: '4px 0' }} />
 
-                            {/* HOW TO PLAY TUTORIAL */}
-                            <div style={{ textAlign: 'left', padding: '0 4px' }}>
-                                <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(12px,3vw,15px)', marginBottom: '8px', textAlign: 'center' }}>🎮 HOW TO PLAY</p>
+                            {/* COMPACT HOW TO PLAY */}
+                            <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(10px,2.5vw,13px)', marginBottom: '4px', textAlign: 'center' }}>🎮 TAP to flap up • Release to fall</p>
 
-                                <p style={{ fontSize: 'clamp(10px,2.5vw,13px)', marginBottom: '6px' }}>
-                                    <span className="hl">SPACE</span> or <span className="hl">TAP</span> to flap — your drone flies upward with each tap. Release to fall.
-                                </p>
-
-                                <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(11px,2.8vw,14px)', marginBottom: '4px', marginTop: '10px' }}>⚠️ THREATS</p>
-                                <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr', gap: '4px 8px', fontSize: 'clamp(9px,2.2vw,12px)', marginBottom: '8px' }}>
-                                    <span>🏢</span><span style={{ color: '#ccc' }}><strong style={{ color: '#EF4444' }}>Missile Towers</strong> — dodge between them or die</span>
-                                    <span>💰</span><span style={{ color: '#ccc' }}><strong style={{ color: '#F59E0B' }}>Sanctions Barriers</strong> — golden walls that slow you (survivable!)</span>
-                                    <span>🚀</span><span style={{ color: '#ccc' }}><strong style={{ color: '#FF4444' }}>Homing Missiles</strong> — track you for 2 sec then fly straight. Trick them into towers! Score 3+</span>
-                                    <span>🏴‍☠️</span><span style={{ color: '#ccc' }}><strong style={{ color: '#8B4513' }}>Pirate Ships</strong> — rogue vessels that bob around. Appear at score 7+</span>
-                                </div>
-
-                                <p style={{ color: '#3B82F6', fontWeight: 700, fontSize: 'clamp(11px,2.8vw,14px)', marginBottom: '4px' }}>✨ POWER-UPS</p>
-                                <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr', gap: '4px 8px', fontSize: 'clamp(9px,2.2vw,12px)', marginBottom: '8px' }}>
-                                    <span>🛢️</span><span style={{ color: '#ccc' }}><strong style={{ color: '#F59E0B' }}>Oil Barrel</strong> — speed boost for 3 seconds</span>
-                                    <span>🏳️</span><span style={{ color: '#ccc' }}><strong style={{ color: '#fff' }}>Peace Treaty</strong> — shield, survives one hit</span>
-                                    <span>🇺🇳</span><span style={{ color: '#ccc' }}><strong style={{ color: '#3B82F6' }}>UN Resolution</strong> — shrinks your drone to dodge easier</span>
-                                </div>
-
-                                <p style={{ color: '#FF6600', fontWeight: 700, fontSize: 'clamp(11px,2.8vw,14px)', marginBottom: '4px' }}>🔥 ESCALATION</p>
-                                <p style={{ fontSize: 'clamp(9px,2.2vw,12px)', color: '#999', marginBottom: '6px' }}>
-                                    As your score rises, the world escalates: <span style={{ color: '#FFaa44' }}>Tense Calm</span> → <span style={{ color: '#FF8800' }}>Escalation</span> → <span style={{ color: '#FF4400' }}>Conflict</span> → <span style={{ color: '#FF0000' }}>Full Chaos</span>. More missiles, faster speed, smaller gaps!
-                                </p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 10px', fontSize: 'clamp(9px,2vw,11px)', color: '#999', marginBottom: '6px' }}>
+                                <span>🏢 <span style={{ color: '#EF4444' }}>Towers</span></span>
+                                <span>💰 <span style={{ color: '#F59E0B' }}>Sanctions</span></span>
+                                <span>🚀 <span style={{ color: '#FF4444' }}>Missiles</span></span>
+                                <span>🏴‍☠️ <span style={{ color: '#8B4513' }}>Pirates</span></span>
+                                <span>🛢️ <span style={{ color: '#F59E0B' }}>Speed</span></span>
+                                <span>🏳️ <span style={{ color: '#fff' }}>Shield</span></span>
+                                <span>🇺🇳 <span style={{ color: '#3B82F6' }}>Shrink</span></span>
                             </div>
 
-                            <div className="soc-divider" />
+                            <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#00CCCC', marginBottom: '4px', fontWeight: 600 }}>
+                                🔄 Swipe down / S = Barrel Roll Dodge • ⚡ E = EMP Blast (5 pipes)
+                            </p>
+                            <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#666', marginBottom: '6px' }}>
+                                🔥 Streak combos • 💀 Near-miss bonus • 🏺 Trump roasts you on failure
+                            </p>
 
-                            <p className="soc-hint" style={{ fontSize: 'clamp(10px,2.2vw,12px)' }}>🏺 Trump commentary on every failure • 📰 Live news ticker</p>
-
-                            <div className="soc-btn-row">
-                                <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none' }}>
-                                    {isChallenge ? '⚔️ Accept Challenge' : '▶ Deploy Drone'}
-                                </button>
-                            </div>
+                            <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none', width: '100%', marginTop: '4px' }}>
+                                {isChallenge ? '⚔️ Accept Challenge' : '▶ Deploy Drone'}
+                            </button>
                         </div>
                     </div>
                 )}
@@ -942,6 +1251,22 @@ const StraitOfChaos = () => {
                                     </div>
                                 </>
                             )}
+
+                            <div className="soc-divider" />
+                            <div className="soc-stats-grid">
+                                <div className="soc-stat">
+                                    <div className="soc-stat-val" style={{ color: '#FF8800' }}>🔥 {bestStreakRef.current}</div>
+                                    <div className="soc-stat-lbl">Best Streak</div>
+                                </div>
+                                <div className="soc-stat">
+                                    <div className="soc-stat-val" style={{ color: '#FFD700' }}>💀 {nearMissCountRef.current}</div>
+                                    <div className="soc-stat-lbl">Near Misses</div>
+                                </div>
+                                <div className="soc-stat">
+                                    <div className="soc-stat-val" style={{ color: '#FF4444' }}>🚀 {missilesDodgedRef.current}</div>
+                                    <div className="soc-stat-lbl">Missiles Dodged</div>
+                                </div>
+                            </div>
 
                             <div className="soc-btn-row">
                                 <button className="soc-btn soc-btn-play" onClick={startGame}>↻ Redeploy</button>
