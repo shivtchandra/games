@@ -69,9 +69,9 @@ const StraitOfChaos = () => {
     };
 
     const getEscalationPhase = (s) => {
-        if (s >= 25) return { name: 'FULL CHAOS', skyTop: '#1A0000', skyBot: '#4A0000', glow: '#FF0000', tint: 'rgba(255,0,0,0.08)' };
-        if (s >= 15) return { name: 'CONFLICT', skyTop: '#1A0A00', skyBot: '#3D1500', glow: '#FF4400', tint: 'rgba(255,68,0,0.05)' };
-        if (s >= 5) return { name: 'ESCALATION', skyTop: '#1A1000', skyBot: '#3D2800', glow: '#FF8800', tint: 'rgba(255,136,0,0.03)' };
+        if (s >= 25) return { name: 'FULL CHAOS', skyTop: '#1A0000', skyBot: '#4A0000', glow: '#FF0000', tint: 'rgba(255,0,0,0.25)' };
+        if (s >= 15) return { name: 'CONFLICT', skyTop: '#1A0A00', skyBot: '#3D1500', glow: '#FF4400', tint: 'rgba(255,68,0,0.18)' };
+        if (s >= 5) return { name: 'ESCALATION', skyTop: '#1A1000', skyBot: '#3D2800', glow: '#FF8800', tint: 'rgba(255,136,0,0.12)' };
         return { name: 'TENSE CALM', skyTop: '#0A0F1A', skyBot: '#1A2A3D', glow: '#FFaa44', tint: 'rgba(0,0,0,0)' };
     };
 
@@ -109,7 +109,7 @@ const StraitOfChaos = () => {
     const birdRef = useRef({
         y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
         velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
-        shieldActive: false, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0,
+        shieldActive: false, shieldTimer: 0, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0,
         propAngle: 0,
     });
 
@@ -173,6 +173,10 @@ const StraitOfChaos = () => {
 
     const seededRandomRange = (min, max) => seededRandomRef.current() * (max - min) + min;
 
+    // Use true randomness for regular play, seeded random only for challenge mode
+    const gameRandom = () => isChallenge ? seededRandomRef.current() : Math.random();
+    const gameRandomRange = (min, max) => gameRandom() * (max - min) + min;
+
     const createParticles = (x, y, color, count = 10) => {
         for (let i = 0; i < count; i++) {
             particlesRef.current.push({ x, y, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5, life: CONFIG.PARTICLE_LIFE, color });
@@ -186,7 +190,7 @@ const StraitOfChaos = () => {
         birdRef.current = {
             y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
             velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
-            shieldActive: false, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
+            shieldActive: false, shieldTimer: 0, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
         };
         pipesRef.current = []; powerupsRef.current = []; particlesRef.current = [];
         touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = [];
@@ -266,7 +270,7 @@ const StraitOfChaos = () => {
     };
 
     const activatePowerup = (type) => {
-        if (type === 'PEACE') birdRef.current.shieldActive = true;
+        if (type === 'PEACE') { birdRef.current.shieldActive = true; birdRef.current.shieldTimer = 300; }
         if (type === 'OIL') birdRef.current.speedBoostTimer = 180;
         if (type === 'UN') birdRef.current.shrinkTimer = 300;
     };
@@ -300,7 +304,7 @@ const StraitOfChaos = () => {
 
         if (frameCountRef.current % CONFIG.DIFFICULTY_INTERVAL === 0) {
             difficultyRef.current.speed = Math.min(difficultyRef.current.speed + CONFIG.DIFFICULTY_SPEED_INC, CONFIG.GAME_SPEED_MAX);
-            difficultyRef.current.spawnRate = Math.max(difficultyRef.current.spawnRate - 5, 60);
+            difficultyRef.current.spawnRate = Math.max(difficultyRef.current.spawnRate - 5, 140);
             difficultyRef.current.gapSize = Math.max(difficultyRef.current.gapSize - 2, CONFIG.GAP_SIZE_MIN);
         }
 
@@ -333,45 +337,50 @@ const StraitOfChaos = () => {
         if (bird.speedBoostTimer > 0) bird.speedBoostTimer--;
         if (bird.shrinkTimer > 0) { bird.shrinkTimer--; bird.radius = (CONFIG.BIRD_SIZE / 2) * 0.6; }
         else bird.radius = CONFIG.BIRD_SIZE / 2;
+        // Shield timer countdown
+        if (bird.shieldActive && bird.shieldTimer > 0) {
+            bird.shieldTimer--;
+            if (bird.shieldTimer <= 0) bird.shieldActive = false;
+        }
 
         // Spawn pipes — randomized patterns
         if (frameCountRef.current % Math.round(difficultyRef.current.spawnRate) === 0) {
             const missileGapBonus = missilesRef.current.length > 0 ? CONFIG.MISSILE_GAP_BONUS : 0;
             const gap = difficultyRef.current.gapSize + missileGapBonus;
-            const topH = seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
+            const topH = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
             const pipeCount = pipesRef.current.filter(p => p.passed).length + pipesRef.current.length;
             const isSanction = (pipeCount + 1) % 5 === 0;
 
-            // Pick pattern based on score (more variety at higher scores)
-            const roll = seededRandomRef.current();
+            // Pick pattern based on score (more variety at all scores)
+            const roll = gameRandom();
             const sc = scoreRef.current;
             let pattern = 'normal';
-            if (sc >= 10 && roll < 0.12) pattern = 'moving';
-            else if (sc >= 7 && roll < 0.24) pattern = 'staggered';
-            else if (sc >= 3 && roll < 0.38) pattern = 'one_sided';
-            else if (roll < 0.52) pattern = 'narrow';
-            else if (roll < 0.64) pattern = 'wide';
+            if (sc >= 10 && roll < 0.15) pattern = 'moving';
+            else if (sc >= 7 && roll < 0.28) pattern = 'staggered';
+            else if (sc >= 2 && roll < 0.42) pattern = 'one_sided';
+            else if (roll < 0.58) pattern = 'narrow';
+            else if (roll < 0.75) pattern = 'wide';
 
             const pipeW = pattern === 'narrow' ? 35 : pattern === 'wide' ? 70 : 50;
             const pipeGap = pattern === 'narrow' ? gap + 20 : gap;
-            const adjTopH = pattern === 'narrow' ? seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - pipeGap - 50) : topH;
+            const adjTopH = pattern === 'narrow' ? gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - pipeGap - 50) : topH;
             const adjBottomY = adjTopH + pipeGap;
 
             // One-sided: only top or bottom
-            const oneSide = pattern === 'one_sided' ? (seededRandomRef.current() > 0.5 ? 'top' : 'bottom') : null;
+            const oneSide = pattern === 'one_sided' ? (gameRandom() > 0.5 ? 'top' : 'bottom') : null;
 
             pipesRef.current.push({
                 x: CONFIG.INTERNAL_WIDTH, topHeight: oneSide === 'bottom' ? 0 : adjTopH,
                 bottomY: oneSide === 'top' ? CONFIG.INTERNAL_HEIGHT : adjBottomY,
                 width: pipeW, passed: false, isSanction, pattern,
-                movingDir: pattern === 'moving' ? (seededRandomRef.current() > 0.5 ? 1 : -1) : 0,
-                movingSpeed: pattern === 'moving' ? 0.3 + seededRandomRef.current() * 0.3 : 0,
+                movingDir: pattern === 'moving' ? (gameRandom() > 0.5 ? 1 : -1) : 0,
+                movingSpeed: pattern === 'moving' ? 0.3 + gameRandom() * 0.3 : 0,
                 oneSide,
             });
 
             // Staggered double: add a second pipe nearby with offset gap
             if (pattern === 'staggered') {
-                const topH2 = seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
+                const topH2 = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
                 pipesRef.current.push({
                     x: CONFIG.INTERNAL_WIDTH + 80, topHeight: topH2, bottomY: topH2 + gap,
                     width: 50, passed: false, isSanction: false, pattern: 'normal',
@@ -379,11 +388,11 @@ const StraitOfChaos = () => {
                 });
             }
 
-            if (seededRandomRef.current() < 0.35) {
+            if (gameRandom() < 0.35) {
                 const types = ['PEACE', 'OIL', 'UN'];
-                const type = types[Math.floor(seededRandomRef.current() * types.length)];
+                const type = types[Math.floor(gameRandom() * types.length)];
                 const py = adjTopH + pipeGap / 2;
-                powerupsRef.current.push({ x: CONFIG.INTERNAL_WIDTH + 30, y: py, type, active: true, baseY: py, offset: seededRandomRef.current() * Math.PI * 2 });
+                powerupsRef.current.push({ x: CONFIG.INTERNAL_WIDTH + 30, y: py, type, active: true, baseY: py, offset: gameRandom() * Math.PI * 2 });
             }
         }
 
@@ -422,9 +431,13 @@ const StraitOfChaos = () => {
                     }
                     continue;
                 } else if (bird.shieldActive) {
-                    bird.shieldActive = false; pipesRef.current.splice(i, 1);
-                    streakRef.current = 0;
-                    createParticles(bird.x, bird.y, '#FFFFFF', 20); continue;
+                    // Shield BREAKS through walls without being consumed!
+                    pipesRef.current.splice(i, 1);
+                    createParticles(bird.x, bird.y, '#FFFFFF', 20);
+                    createParticles(pipe.x + pipe.width / 2, bird.y, '#FF6600', 12);
+                    // Score it as passed
+                    if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
+                    continue;
                 } else {
                     gameOver(); return;
                 }
@@ -481,10 +494,10 @@ const StraitOfChaos = () => {
 
         // Spawn homing missiles (after score 3, every ~400 frames, with warning)
         if (scoreRef.current >= 3 && frameCountRef.current % 380 === 0) {
-            const side = seededRandomRef.current() > 0.5 ? 'right' : 'top';
+            const side = gameRandom() > 0.5 ? 'right' : 'top';
             missilesRef.current.push({
-                x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : seededRandomRange(100, CONFIG.INTERNAL_WIDTH - 50),
-                y: side === 'top' ? -20 : seededRandomRange(50, CONFIG.INTERNAL_HEIGHT - 50),
+                x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : gameRandomRange(100, CONFIG.INTERNAL_WIDTH - 50),
+                y: side === 'top' ? -20 : gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - 50),
                 vx: 0, vy: 0, speed: 1.0 + scoreRef.current * 0.04,
                 life: 300, age: 0, trackingLife: 120, // stops homing after 120 frames (~2 sec)
                 trail: [], warning: 60, // 60 frames of warning before active
@@ -529,8 +542,9 @@ const StraitOfChaos = () => {
                     missilesDodgedRef.current++;
                     missilesRef.current.splice(i, 1); continue;
                 } else if (bird.shieldActive) {
-                    bird.shieldActive = false;
+                    // Shield BREAKS through missiles without being consumed!
                     createParticles(m.x, m.y, '#FF4444', 15);
+                    createParticles(m.x, m.y, '#FFFFFF', 8);
                     missilesRef.current.splice(i, 1); continue;
                 } else { gameOver(); return; }
             }
@@ -562,9 +576,9 @@ const StraitOfChaos = () => {
         if (scoreRef.current >= 7 && frameCountRef.current % 380 === 0) {
             piratesRef.current.push({
                 x: CONFIG.INTERNAL_WIDTH + 40,
-                y: seededRandomRange(80, CONFIG.INTERNAL_HEIGHT - 80),
-                baseY: 0, speed: 0.6 + seededRandomRef.current() * 0.4,
-                bobOffset: seededRandomRef.current() * Math.PI * 2,
+                y: gameRandomRange(80, CONFIG.INTERNAL_HEIGHT - 80),
+                baseY: 0, speed: 0.6 + gameRandom() * 0.4,
+                bobOffset: gameRandom() * Math.PI * 2,
                 width: 50, height: 30,
             });
             piratesRef.current[piratesRef.current.length - 1].baseY = piratesRef.current[piratesRef.current.length - 1].y;
@@ -582,8 +596,9 @@ const StraitOfChaos = () => {
                     createParticles(p.x, p.y, '#00FFFF', 10);
                     piratesRef.current.splice(i, 1); continue;
                 } else if (bird.shieldActive) {
-                    bird.shieldActive = false;
+                    // Shield BREAKS through pirates without being consumed!
                     createParticles(p.x, p.y, '#8B4513', 15);
+                    createParticles(p.x, p.y, '#FFFFFF', 8);
                     piratesRef.current.splice(i, 1); continue;
                 } else { gameOver(); return; }
             }
@@ -1200,25 +1215,37 @@ const StraitOfChaos = () => {
 
                             <div className="soc-divider" style={{ margin: '4px 0' }} />
 
-                            {/* COMPACT HOW TO PLAY */}
-                            <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(10px,2.5vw,13px)', marginBottom: '4px', textAlign: 'center' }}>🎮 TAP to flap up • Release to fall</p>
+                            {/* CLEAR HOW TO PLAY */}
+                            <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(12px,3vw,15px)', marginBottom: '8px', textAlign: 'center' }}>🎮 HOW TO PLAY</p>
 
-                            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 10px', fontSize: 'clamp(9px,2vw,11px)', color: '#999', marginBottom: '6px' }}>
-                                <span>🏢 <span style={{ color: '#EF4444' }}>Towers</span></span>
-                                <span>💰 <span style={{ color: '#F59E0B' }}>Sanctions</span></span>
-                                <span>🚀 <span style={{ color: '#FF4444' }}>Missiles</span></span>
-                                <span>🏴‍☠️ <span style={{ color: '#8B4513' }}>Pirates</span></span>
-                                <span>🛢️ <span style={{ color: '#F59E0B' }}>Speed</span></span>
-                                <span>🏳️ <span style={{ color: '#fff' }}>Shield</span></span>
-                                <span>🇺🇳 <span style={{ color: '#3B82F6' }}>Shrink</span></span>
+                            <div style={{ textAlign: 'left', fontSize: 'clamp(10px,2.5vw,12px)', color: '#ccc', lineHeight: 1.6, marginBottom: '8px' }}>
+                                <p style={{ marginBottom: '6px' }}><span className="hl">TAP / CLICK</span> to flap upward. Release to fall. Navigate between obstacles!</p>
+
+                                <p style={{ color: '#EF4444', fontWeight: 700, marginBottom: '4px' }}>⚠️ OBSTACLES</p>
+                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '8px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
+                                    <span>🏢</span><span><strong style={{ color: '#EF4444' }}>Missile Towers</strong> — fly between the gaps</span>
+                                    <span>💰</span><span><strong style={{ color: '#F59E0B' }}>Sanctions</strong> — golden walls, slow you down (won't kill!)</span>
+                                    <span>🚀</span><span><strong style={{ color: '#FF4444' }}>Homing Missiles</strong> — chase you! (appear at score 3+)</span>
+                                    <span>🏴‍☠️</span><span><strong style={{ color: '#8B4513' }}>Pirates</strong> — floating ships to dodge (score 7+)</span>
+                                </div>
+
+                                <p style={{ color: '#3B82F6', fontWeight: 700, marginBottom: '4px' }}>✨ POWER-UPS (collect to activate!)</p>
+                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '8px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
+                                    <span>🛢️</span><span><strong style={{ color: '#F59E0B' }}>Oil Barrel</strong> — 3s speed boost</span>
+                                    <span>🏳️</span><span><strong style={{ color: '#fff' }}>Peace Treaty</strong> — 5s shield, SMASH through everything!</span>
+                                    <span>🇺🇳</span><span><strong style={{ color: '#3B82F6' }}>UN Resolution</strong> — shrinks drone to dodge easier</span>
+                                </div>
+
+                                <p style={{ color: '#00CCCC', fontWeight: 700, marginBottom: '4px' }}>🎯 SPECIAL MOVES</p>
+                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '6px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
+                                    <span>🔄</span><span><strong style={{ color: '#00CCCC' }}>Barrel Roll</strong> — Swipe down / press <strong>S</strong> (4s cooldown)</span>
+                                    <span>⚡</span><span><strong style={{ color: '#00CCCC' }}>EMP Blast</strong> — press <strong>E</strong> (charges after 5 pipes)</span>
+                                </div>
+
+                                <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#666' }}>
+                                    🔥 Streak combos • 💀 Near-miss bonus • 🏺 Trump commentary on death
+                                </p>
                             </div>
-
-                            <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#00CCCC', marginBottom: '4px', fontWeight: 600 }}>
-                                🔄 Swipe down / S = Barrel Roll Dodge • ⚡ E = EMP Blast (5 pipes)
-                            </p>
-                            <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#666', marginBottom: '6px' }}>
-                                🔥 Streak combos • 💀 Near-miss bonus • 🏺 Trump roasts you on failure
-                            </p>
 
                             <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none', width: '100%', marginTop: '4px' }}>
                                 {isChallenge ? '⚔️ Accept Challenge' : '▶ Deploy Drone'}
