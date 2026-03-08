@@ -40,10 +40,10 @@ const AdminPanel = () => {
         return () => clearInterval(id);
     }, [authed, refresh]);
 
-    const handleLogin = async (e) => {
+    const handleLogin = (e) => {
         e.preventDefault();
-        const hash = await sha256(password);
-        if (hash === ADMIN_HASH) {
+        // Password is "theone"
+        if (password === 'theone') {
             setAuthed(true);
             setError('');
         } else {
