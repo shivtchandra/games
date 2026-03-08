@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { trackGameOpen, trackGameStart, trackGameEnd } from './analytics';
 import warzoneSkyline from './assets/warzone_skyline.png';
 import missileTower from './assets/missile_tower.png';
 import failSoundUrl from './assets/fahhhhh.mp3';
@@ -149,6 +150,7 @@ const StraitOfChaos = () => {
     useEffect(() => {
         updateCanvasSize();
         window.addEventListener('resize', updateCanvasSize);
+        trackGameOpen('Strait of Chaos');
         return () => window.removeEventListener('resize', updateCanvasSize);
     }, [updateCanvasSize]);
 
@@ -216,6 +218,7 @@ const StraitOfChaos = () => {
         if (!isChallenge) { currentSeedRef.current = generateSeed(); seededRandomRef.current = createSeededRandom(currentSeedRef.current); }
         // Start background music
         if (bgmRef.current) { bgmRef.current.currentTime = 0; bgmRef.current.volume = 0.3; bgmRef.current.play().catch(() => { }); }
+        trackGameStart('Strait of Chaos');
         setGameState('PLAYING');
     }, [resetGame, isChallenge]);
 
@@ -279,6 +282,7 @@ const StraitOfChaos = () => {
         setGameState('GAMEOVER');
         const fs = scoreRef.current;
         setScore(fs);
+        trackGameEnd('Strait of Chaos', fs);
         if (fs > highScore) { setHighScore(fs); localStorage.setItem('straitChaosHighScore', String(fs)); }
         // Save best streak
         if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
