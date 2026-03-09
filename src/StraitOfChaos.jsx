@@ -56,12 +56,138 @@ const TRUMP_QUOTES = [
     "We will make this strait GREAT again!",
 ];
 
+const DIFFICULTY_LEVELS = {
+    EASY: {
+        label: 'Easy',
+        tagline: 'Wide gaps, slower pace',
+        gravity: 0.165,
+        flapStrength: -3.65,
+        speedStart: 0.72,
+        maxSpeed: 1.55,
+        spawnRateStart: 240,
+        minSpawnRate: 165,
+        gapStart: 190,
+        minGap: 150,
+        speedInc: 0.22,
+        spawnStep: 4,
+        gapStep: 1.5,
+        sanctionEvery: 6,
+        missileStartScore: 5,
+        missileSpawnEvery: 420,
+        pirateStartScore: 10,
+        pirateSpawnEvery: 420,
+        powerupChance: 0.42,
+    },
+    MEDIUM: {
+        label: 'Medium',
+        tagline: 'Balanced chaos',
+        gravity: 0.18,
+        flapStrength: -3.8,
+        speedStart: 0.8,
+        maxSpeed: 1.8,
+        spawnRateStart: 220,
+        minSpawnRate: 140,
+        gapStart: 170,
+        minGap: 130,
+        speedInc: 0.3,
+        spawnStep: 5,
+        gapStep: 2,
+        sanctionEvery: 5,
+        missileStartScore: 3,
+        missileSpawnEvery: 380,
+        pirateStartScore: 7,
+        pirateSpawnEvery: 380,
+        powerupChance: 0.35,
+    },
+    HARD: {
+        label: 'Hard',
+        tagline: 'Tight gaps, heavy pressure',
+        gravity: 0.2,
+        flapStrength: -3.95,
+        speedStart: 0.92,
+        maxSpeed: 2.25,
+        spawnRateStart: 205,
+        minSpawnRate: 120,
+        gapStart: 155,
+        minGap: 115,
+        speedInc: 0.35,
+        spawnStep: 6,
+        gapStep: 2.4,
+        sanctionEvery: 4,
+        missileStartScore: 2,
+        missileSpawnEvery: 330,
+        pirateStartScore: 5,
+        pirateSpawnEvery: 340,
+        powerupChance: 0.28,
+    },
+};
+
+const MILESTONE_UPGRADES = [
+    { score: 10, name: 'Mk-II Thrusters', effect: 'Barrel roll cooldown reduced to 3s', headline: 'Drone upgraded at 10 towers: Mk-II Thrusters online' },
+    { score: 20, name: 'EMP Capacitor', effect: 'EMP now charges in 4 clears', headline: '20 towers breached: EMP Capacitor installed' },
+    { score: 30, name: 'Tactical AI Core', effect: 'More power-up drops and longer Peace shield', headline: '30 towers reached: Tactical AI Core activated' },
+];
+
+const HIGH_SCORE_STORAGE_KEY = 'straitChaosHighScoresByDifficulty';
+const DEFAULT_DIFFICULTY = 'MEDIUM';
+
+function parseDifficulty(value) {
+    if (!value) return null;
+    const key = String(value).toUpperCase();
+    return Object.prototype.hasOwnProperty.call(DIFFICULTY_LEVELS, key) ? key : null;
+}
+
+function readDifficultyHighScores() {
+    const fallback = { EASY: 0, MEDIUM: 0, HARD: 0 };
+    try {
+        const raw = localStorage.getItem(HIGH_SCORE_STORAGE_KEY);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return {
+            EASY: Number.isFinite(parsed?.EASY) ? parsed.EASY : 0,
+            MEDIUM: Number.isFinite(parsed?.MEDIUM) ? parsed.MEDIUM : 0,
+            HARD: Number.isFinite(parsed?.HARD) ? parsed.HARD : 0,
+        };
+    } catch {
+        return fallback;
+    }
+}
+
+function getDifficultyProfile(levelKey) {
+    return DIFFICULTY_LEVELS[levelKey] || DIFFICULTY_LEVELS[DEFAULT_DIFFICULTY];
+}
+
+function getDifficultyHighScore(highScores, levelKey) {
+    return Number.isFinite(highScores?.[levelKey]) ? highScores[levelKey] : 0;
+}
+
+function createDifficultyRuntime(levelKey) {
+    const normalized = parseDifficulty(levelKey) || DEFAULT_DIFFICULTY;
+    const profile = getDifficultyProfile(normalized);
+    return {
+        level: normalized,
+        profile,
+        speed: profile.speedStart,
+        spawnRate: profile.spawnRateStart,
+        gapSize: profile.gapStart,
+        maxSpeed: profile.maxSpeed,
+        minSpawnRate: profile.minSpawnRate,
+        minGapSize: profile.minGap,
+        speedInc: profile.speedInc,
+        spawnStep: profile.spawnStep,
+        gapStep: profile.gapStep,
+    };
+}
+
 const StraitOfChaos = () => {
     const CONFIG = {
-        GRAVITY: 0.18, FLAP_STRENGTH: -3.8, BIRD_SIZE: 20, GAME_SPEED_START: 0.8, GAME_SPEED_MAX: 1.8,
-        SPAWN_RATE_START: 220, GAP_SIZE_START: 170, GAP_SIZE_MIN: 130, MISSILE_GAP_BONUS: 50,
-        INTERNAL_WIDTH: 400, INTERNAL_HEIGHT: 700, PARTICLE_LIFE: 30,
-        POWERUP_SIZE: 25, DIFFICULTY_INTERVAL: 900, DIFFICULTY_SPEED_INC: 0.3,
+        BIRD_SIZE: 20,
+        MISSILE_GAP_BONUS: 50,
+        INTERNAL_WIDTH: 400,
+        INTERNAL_HEIGHT: 700,
+        PARTICLE_LIFE: 30,
+        POWERUP_SIZE: 25,
+        DIFFICULTY_INTERVAL: 900,
     };
 
     const FACTIONS = {
@@ -79,18 +205,19 @@ const StraitOfChaos = () => {
     const urlParams = useRef(new URLSearchParams(window.location.search));
     const challengeSeed = useRef(urlParams.current.has('seed') ? parseInt(urlParams.current.get('seed'), 10) : null);
     const challengeScore = useRef(urlParams.current.has('score') ? parseInt(urlParams.current.get('score'), 10) : null);
+    const challengeDifficulty = useRef(parseDifficulty(urlParams.current.get('difficulty')));
     const isChallenge = challengeSeed.current !== null;
+    const isDifficultyLocked = isChallenge && challengeDifficulty.current !== null;
 
     const [gameState, setGameState] = useState('START');
     const [score, setScore] = useState(0);
     const [faction, setFaction] = useState(null);
-    const [highScore, setHighScore] = useState(() => {
-        const s = localStorage.getItem('straitChaosHighScore');
-        return s ? parseInt(s, 10) : 0;
-    });
+    const [selectedDifficulty, setSelectedDifficulty] = useState(challengeDifficulty.current || DEFAULT_DIFFICULTY);
+    const [highScores, setHighScores] = useState(readDifficultyHighScores);
     const [showShareModal, setShowShareModal] = useState(false);
     const [copied, setCopied] = useState(false);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+    const [activeTab, setActiveTab] = useState('MISSION');
     const [soundEnabled, setSoundEnabled] = useState(() => {
         const s = localStorage.getItem('straitChaosSoundOn');
         return s !== null ? s === 'true' : true;
@@ -106,6 +233,7 @@ const StraitOfChaos = () => {
     const activeHeadlinesRef = useRef([NEWS_HEADLINES[0], NEWS_HEADLINES[1], NEWS_HEADLINES[2]]);
     const lastHeadlineIdxRef = useRef(2);
     const factionRef = useRef(null);
+    const selectedDifficultyRef = useRef(challengeDifficulty.current || DEFAULT_DIFFICULTY);
 
     const birdRef = useRef({
         y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
@@ -124,7 +252,9 @@ const StraitOfChaos = () => {
     const failSoundRef = useRef(null);
     const bgmRef = useRef(null);
     const soundEnabledRef = useRef(soundEnabled);
-    const difficultyRef = useRef({ speed: CONFIG.GAME_SPEED_START, spawnRate: CONFIG.SPAWN_RATE_START, gapSize: CONFIG.GAP_SIZE_START });
+    const difficultyRef = useRef(createDifficultyRuntime(selectedDifficultyRef.current));
+    const progressionRef = useRef({ tier: 0, barrelCooldown: 240, empMaxCharge: 5, powerupBonus: 0, shieldBonusFrames: 0 });
+    const milestoneToastRef = useRef({ title: '', detail: '', timer: 0 });
     const bgImageRef = useRef(null);
     const towerImageRef = useRef(null);
     // Streak & stats refs
@@ -173,7 +303,16 @@ const StraitOfChaos = () => {
         if (failSoundRef.current) failSoundRef.current.muted = !soundEnabled;
     }, [soundEnabled]);
 
-    const seededRandomRange = (min, max) => seededRandomRef.current() * (max - min) + min;
+    useEffect(() => {
+        if (isDifficultyLocked && challengeDifficulty.current && selectedDifficulty !== challengeDifficulty.current) {
+            setSelectedDifficulty(challengeDifficulty.current);
+            selectedDifficultyRef.current = challengeDifficulty.current;
+        }
+    }, [isDifficultyLocked, selectedDifficulty]);
+
+    useEffect(() => {
+        selectedDifficultyRef.current = selectedDifficulty;
+    }, [selectedDifficulty]);
 
     // Use true randomness for regular play, seeded random only for challenge mode
     const gameRandom = () => isChallenge ? seededRandomRef.current() : Math.random();
@@ -186,6 +325,8 @@ const StraitOfChaos = () => {
     };
 
     const resetGame = useCallback(() => {
+        const levelKey = isDifficultyLocked ? challengeDifficulty.current : selectedDifficultyRef.current;
+        const difficultyRuntime = createDifficultyRuntime(levelKey);
         currentSeedRef.current = isChallenge ? challengeSeed.current : generateSeed();
         seededRandomRef.current = createSeededRandom(currentSeedRef.current);
         scoreRef.current = 0;
@@ -198,7 +339,9 @@ const StraitOfChaos = () => {
         touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = [];
         trumpQuoteRef.current = { text: '', timer: 0 };
         frameCountRef.current = 0;
-        difficultyRef.current = { speed: CONFIG.GAME_SPEED_START, spawnRate: CONFIG.SPAWN_RATE_START, gapSize: CONFIG.GAP_SIZE_START };
+        difficultyRef.current = difficultyRuntime;
+        progressionRef.current = { tier: 0, barrelCooldown: 240, empMaxCharge: 5, powerupBonus: 0, shieldBonusFrames: 0 };
+        milestoneToastRef.current = { title: '', detail: '', timer: 0 };
         newsOffsetRef.current = 0;
         activeHeadlinesRef.current = [NEWS_HEADLINES[0], NEWS_HEADLINES[1], NEWS_HEADLINES[2]];
         lastHeadlineIdxRef.current = 2;
@@ -208,9 +351,9 @@ const StraitOfChaos = () => {
         comboTextRef.current = { text: '', timer: 0 };
         nearMissTextRef.current = { timer: 0, x: 0, y: 0 };
         barrelRollRef.current = { active: false, timer: 0, cooldown: 0, angle: 0 };
-        empRef.current = { charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0 };
+        empRef.current = { charge: 0, maxCharge: progressionRef.current.empMaxCharge, blastTimer: 0, blastX: 0, blastY: 0 };
         setScore(0); setShowShareModal(false); setCopied(false); setGameState('START');
-    }, [isChallenge]);
+    }, [isChallenge, isDifficultyLocked]);
 
     const startGame = useCallback(() => {
         if (!factionRef.current) return;
@@ -225,7 +368,7 @@ const StraitOfChaos = () => {
     const flap = useCallback(() => {
         const bird = birdRef.current;
         const f = factionRef.current || FACTIONS.USA;
-        bird.velocity = CONFIG.FLAP_STRENGTH;
+        bird.velocity = difficultyRef.current.profile.flapStrength;
         createParticles(bird.x, bird.y, f.color, 5);
     }, []);
 
@@ -234,7 +377,7 @@ const StraitOfChaos = () => {
         if (br.cooldown > 0 || br.active) return;
         br.active = true;
         br.timer = 24; // ~0.4 seconds at 60fps
-        br.cooldown = 240; // ~4 seconds
+        br.cooldown = progressionRef.current.barrelCooldown;
         br.angle = 0;
         createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 10);
     }, []);
@@ -273,7 +416,7 @@ const StraitOfChaos = () => {
     };
 
     const activatePowerup = (type) => {
-        if (type === 'PEACE') { birdRef.current.shieldActive = true; birdRef.current.shieldTimer = 300; }
+        if (type === 'PEACE') { birdRef.current.shieldActive = true; birdRef.current.shieldTimer = 300 + progressionRef.current.shieldBonusFrames; }
         if (type === 'OIL') birdRef.current.speedBoostTimer = 180;
         if (type === 'UN') birdRef.current.shrinkTimer = 300;
     };
@@ -281,9 +424,16 @@ const StraitOfChaos = () => {
     const gameOver = useCallback(() => {
         setGameState('GAMEOVER');
         const fs = scoreRef.current;
+        const levelKey = difficultyRef.current.level || selectedDifficultyRef.current;
         setScore(fs);
         trackGameEnd('Strait of Chaos', fs);
-        if (fs > highScore) { setHighScore(fs); localStorage.setItem('straitChaosHighScore', String(fs)); }
+        setHighScores(prev => {
+            const currentBest = getDifficultyHighScore(prev, levelKey);
+            if (fs <= currentBest) return prev;
+            const next = { ...prev, [levelKey]: fs };
+            localStorage.setItem(HIGH_SCORE_STORAGE_KEY, JSON.stringify(next));
+            return next;
+        });
         // Save best streak
         if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
         // Lower music volume
@@ -298,24 +448,55 @@ const StraitOfChaos = () => {
             text: TRUMP_QUOTES[Math.floor(Math.random() * TRUMP_QUOTES.length)],
             timer: 180,
         };
-    }, [highScore]);
+    }, []);
+
+    const applyMilestoneUpgrades = useCallback(() => {
+        const targetTier = Math.min(MILESTONE_UPGRADES.length, Math.floor(scoreRef.current / 10));
+        if (targetTier <= progressionRef.current.tier) return;
+
+        for (let tier = progressionRef.current.tier + 1; tier <= targetTier; tier++) {
+            if (tier >= 1) progressionRef.current.barrelCooldown = 180;
+            if (tier >= 2) {
+                progressionRef.current.empMaxCharge = 4;
+                if (empRef.current.charge > 4) empRef.current.charge = 4;
+            }
+            if (tier >= 3) {
+                progressionRef.current.powerupBonus = 0.12;
+                progressionRef.current.shieldBonusFrames = 60;
+            }
+
+            empRef.current.maxCharge = progressionRef.current.empMaxCharge;
+
+            const upgrade = MILESTONE_UPGRADES[tier - 1];
+            milestoneToastRef.current = {
+                title: `UPGRADE UNLOCKED: ${upgrade.name}`,
+                detail: upgrade.effect,
+                timer: 150,
+            };
+            activeHeadlinesRef.current.push(`🛠️ ${upgrade.headline}`);
+        }
+
+        progressionRef.current.tier = targetTier;
+    }, []);
 
     // --- UPDATE ---
     const update = useCallback(() => {
         frameCountRef.current++;
+        applyMilestoneUpgrades();
         const bird = birdRef.current;
-        const f = factionRef.current || FACTIONS.USA;
+        const difficulty = difficultyRef.current;
+        const profile = difficulty.profile;
 
         if (frameCountRef.current % CONFIG.DIFFICULTY_INTERVAL === 0) {
-            difficultyRef.current.speed = Math.min(difficultyRef.current.speed + CONFIG.DIFFICULTY_SPEED_INC, CONFIG.GAME_SPEED_MAX);
-            difficultyRef.current.spawnRate = Math.max(difficultyRef.current.spawnRate - 5, 140);
-            difficultyRef.current.gapSize = Math.max(difficultyRef.current.gapSize - 2, CONFIG.GAP_SIZE_MIN);
+            difficulty.speed = Math.min(difficulty.speed + difficulty.speedInc, difficulty.maxSpeed);
+            difficulty.spawnRate = Math.max(difficulty.spawnRate - difficulty.spawnStep, difficulty.minSpawnRate);
+            difficulty.gapSize = Math.max(difficulty.gapSize - difficulty.gapStep, difficulty.minGapSize);
         }
 
-        let currentSpeed = bird.speedBoostTimer > 0 ? difficultyRef.current.speed * 1.5 : difficultyRef.current.speed;
+        let currentSpeed = bird.speedBoostTimer > 0 ? difficulty.speed * 1.5 : difficulty.speed;
         if (bird.sanctionSlowTimer > 0) { currentSpeed *= 0.5; bird.sanctionSlowTimer--; }
 
-        bird.velocity += CONFIG.GRAVITY;
+        bird.velocity += profile.gravity;
         bird.y += bird.velocity;
         bird.propAngle += 0.3;
 
@@ -348,12 +529,12 @@ const StraitOfChaos = () => {
         }
 
         // Spawn pipes — randomized patterns
-        if (frameCountRef.current % Math.round(difficultyRef.current.spawnRate) === 0) {
+        if (frameCountRef.current % Math.round(difficulty.spawnRate) === 0) {
             const missileGapBonus = missilesRef.current.length > 0 ? CONFIG.MISSILE_GAP_BONUS : 0;
-            const gap = difficultyRef.current.gapSize + missileGapBonus;
+            const gap = difficulty.gapSize + missileGapBonus;
             const topH = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
             const pipeCount = pipesRef.current.filter(p => p.passed).length + pipesRef.current.length;
-            const isSanction = (pipeCount + 1) % 5 === 0;
+            const isSanction = (pipeCount + 1) % profile.sanctionEvery === 0;
 
             // Pick pattern based on score (more variety at all scores)
             const roll = gameRandom();
@@ -392,7 +573,8 @@ const StraitOfChaos = () => {
                 });
             }
 
-            if (gameRandom() < 0.35) {
+            const powerupChance = Math.min(0.75, profile.powerupChance + progressionRef.current.powerupBonus);
+            if (gameRandom() < powerupChance) {
                 const types = ['PEACE', 'OIL', 'UN'];
                 const type = types[Math.floor(gameRandom() * types.length)];
                 const py = adjTopH + pipeGap / 2;
@@ -497,7 +679,7 @@ const StraitOfChaos = () => {
         newsOffsetRef.current += 0.8;
 
         // Spawn homing missiles (after score 3, every ~400 frames, with warning)
-        if (scoreRef.current >= 3 && frameCountRef.current % 380 === 0) {
+        if (scoreRef.current >= profile.missileStartScore && frameCountRef.current % profile.missileSpawnEvery === 0) {
             const side = gameRandom() > 0.5 ? 'right' : 'top';
             missilesRef.current.push({
                 x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : gameRandomRange(100, CONFIG.INTERNAL_WIDTH - 50),
@@ -577,7 +759,7 @@ const StraitOfChaos = () => {
         }
 
         // Spawn pirates (after score 7, every ~400 frames)
-        if (scoreRef.current >= 7 && frameCountRef.current % 380 === 0) {
+        if (scoreRef.current >= profile.pirateStartScore && frameCountRef.current % profile.pirateSpawnEvery === 0) {
             piratesRef.current.push({
                 x: CONFIG.INTERNAL_WIDTH + 40,
                 y: gameRandomRange(80, CONFIG.INTERNAL_HEIGHT - 80),
@@ -616,7 +798,8 @@ const StraitOfChaos = () => {
         if (nearMissTextRef.current.timer > 0) nearMissTextRef.current.timer--;
         // EMP blast timer
         if (empRef.current.blastTimer > 0) empRef.current.blastTimer--;
-    }, [gameOver]);
+        if (milestoneToastRef.current.timer > 0) milestoneToastRef.current.timer--;
+    }, [applyMilestoneUpgrades, gameOver]);
 
     // --- DRAW ---
     const draw = useCallback(() => {
@@ -798,7 +981,8 @@ const StraitOfChaos = () => {
 
         // --- BARREL ROLL COOLDOWN RING ---
         if (barrelRollRef.current.cooldown > 0 && !barrelRollRef.current.active) {
-            const cdPct = 1 - barrelRollRef.current.cooldown / 240;
+            const barrelCooldownMax = Math.max(1, progressionRef.current.barrelCooldown);
+            const cdPct = 1 - barrelRollRef.current.cooldown / barrelCooldownMax;
             ctx.strokeStyle = '#00FFFF'; ctx.lineWidth = 2;
             ctx.globalAlpha = 0.5;
             ctx.beginPath();
@@ -945,6 +1129,10 @@ const StraitOfChaos = () => {
         ctx.font = 'bold 10px "Orbitron", monospace'; ctx.fillStyle = phase.glow;
         ctx.textAlign = 'right'; ctx.textBaseline = 'top';
         ctx.fillText('◆ ' + phase.name, W - 12, 10);
+        const runProfile = difficultyRef.current.profile;
+        ctx.font = 'bold 9px "Orbitron", monospace';
+        ctx.fillStyle = '#93C5FD';
+        ctx.fillText(`LEVEL ${runProfile.label.toUpperCase()} • TIER ${progressionRef.current.tier}`, W - 12, 24);
 
         // --- STREAK FIRE EFFECT ---
         if (streakRef.current >= 5) {
@@ -989,6 +1177,31 @@ const StraitOfChaos = () => {
             ctx.shadowBlur = 8; ctx.shadowColor = '#FFD700';
             ctx.fillText('💀 CLOSE CALL!', nm.x, nm.y - (40 - nm.timer));
             ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        }
+
+        // Milestone toast
+        if (milestoneToastRef.current.timer > 0) {
+            const mt = milestoneToastRef.current;
+            const alpha = Math.min(1, mt.timer / 30);
+            const boxW = Math.min(340, W - 40);
+            const boxH = 56;
+            const x = (W - boxW) / 2;
+            const y = 112;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = 'rgba(5,15,25,0.9)';
+            ctx.fillRect(x, y, boxW, boxH);
+            ctx.strokeStyle = '#22D3EE';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, y, boxW, boxH);
+            ctx.font = 'bold 11px "Orbitron", monospace';
+            ctx.fillStyle = '#67E8F9';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(mt.title, W / 2, y + 18);
+            ctx.font = '10px "Inter", sans-serif';
+            ctx.fillStyle = '#E5E7EB';
+            ctx.fillText(mt.detail, W / 2, y + 37);
+            ctx.globalAlpha = 1;
         }
 
         // Trump quote overlay
@@ -1084,10 +1297,16 @@ const StraitOfChaos = () => {
     };
 
     const selectFaction = (key) => { setFaction(key); factionRef.current = FACTIONS[key]; };
+    const selectDifficulty = (levelKey) => {
+        if (isDifficultyLocked) return;
+        const normalized = parseDifficulty(levelKey) || DEFAULT_DIFFICULTY;
+        setSelectedDifficulty(normalized);
+    };
 
     const getShareUrl = () => {
         const base = window.location.origin + window.location.pathname;
-        return `${base}?seed=${currentSeedRef.current}&score=${scoreRef.current}`;
+        const levelKey = difficultyRef.current.level || selectedDifficultyRef.current;
+        return `${base}?seed=${currentSeedRef.current}&score=${scoreRef.current}&difficulty=${levelKey.toLowerCase()}`;
     };
 
     const copyShareLink = async () => {
@@ -1100,6 +1319,10 @@ const StraitOfChaos = () => {
     };
 
     const f = faction ? FACTIONS[faction] : null;
+    const difficultyProfile = getDifficultyProfile(selectedDifficulty);
+    const highScore = getDifficultyHighScore(highScores, selectedDifficulty);
+    const scoreTier = Math.min(MILESTONE_UPGRADES.length, Math.floor(score / 10));
+    const nextMilestoneDelta = scoreTier >= MILESTONE_UPGRADES.length ? 0 : (10 - (score % 10));
     const phase = getEscalationPhase(score);
 
     return (
@@ -1111,37 +1334,70 @@ const StraitOfChaos = () => {
         .soc-wrap canvas { display: block; width: 100%; height: 100%; touch-action: manipulation; }
         .soc-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
         .soc-score { position: absolute; top: clamp(8px,3vw,24px); left: 0; right: 0; text-align: center; font-family: 'Orbitron', monospace; font-size: clamp(24px,6vw,48px); font-weight: 900; color: #fff; text-shadow: 0 0 15px ${phase.glow}; z-index: 10; letter-spacing: 2px; }
-        .soc-screen { pointer-events: auto; background: rgba(10,10,20,0.94); backdrop-filter: blur(12px); border: 1px solid rgba(239,68,68,0.4); border-radius: clamp(12px,3vw,24px); padding: clamp(16px,4vw,40px) clamp(14px,3.5vw,36px); text-align: center; max-width: 90%; width: clamp(300px,82vw,440px); box-shadow: 0 0 40px rgba(239,68,68,0.15), 0 0 80px rgba(245,158,11,0.08); animation: fadeIn 0.4s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
-        .soc-screen h1 { font-family: 'Black Ops One', monospace; font-size: clamp(20px,5.5vw,36px); color: #EF4444; text-shadow: 0 0 20px rgba(239,68,68,0.6), 0 2px 4px rgba(0,0,0,0.5); margin-bottom: clamp(4px,1.5vw,12px); text-transform: uppercase; letter-spacing: clamp(1px,0.4vw,3px); line-height: 1.2; }
-        .soc-screen p { font-family: 'Inter', sans-serif; color: #a0a0c0; font-size: clamp(11px,2.8vw,15px); margin-bottom: clamp(4px,1.2vw,10px); line-height: 1.5; }
+        .soc-screen { pointer-events: auto; background: rgba(5, 5, 10, 0.96); backdrop-filter: blur(20px); border: 1px solid rgba(239,68,68,0.5); border-radius: 16px; padding: 0; text-align: center; max-width: 90%; width: clamp(320px, 85vw, 460px); box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 20px rgba(239,68,68,0.2); animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden; position: relative; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        
+        /* New Header/Tab System */
+        .soc-header { background: rgba(239, 68, 68, 0.1); border-bottom: 1px solid rgba(239, 68, 68, 0.3); padding: 16px 20px 0; display: flex; flex-direction: column; align-items: center; }
+        .soc-header h1 { font-family: 'Black Ops One', cursive; font-size: clamp(22px, 6vw, 32px); color: #EF4444; text-shadow: 0 0 15px rgba(239,68,68,0.5); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 2px; }
+        .soc-tabs { display: flex; width: 100%; gap: 2px; margin-top: 4px; }
+        .soc-tab-btn { flex: 1; background: transparent; border: none; padding: 10px; color: #666; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s; border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 1px; }
+        .soc-tab-btn.active { color: #EF4444; border-bottom-color: #EF4444; background: rgba(239, 68, 68, 0.05); }
+        .soc-tab-btn:hover:not(.active) { color: #aaa; background: rgba(255, 255, 255, 0.03); }
+
+        .soc-body { padding: 20px; max-height: 70vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(239, 68, 68, 0.3) transparent; }
+        .soc-body::-webkit-scrollbar { width: 4px; }
+        .soc-body::-webkit-scrollbar-thumb { background: rgba(239, 68, 68, 0.3); border-radius: 10px; }
+        
+        .soc-section-title { font-family: 'Orbitron', sans-serif; font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+        .soc-section-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(239,68,68,0.2), transparent); }
+
+        .soc-screen h1 { margin-bottom: 0; }
+        .soc-screen p { font-family: 'Inter', sans-serif; color: #94a3b8; font-size: 13px; margin-bottom: 12px; line-height: 1.5; }
         .soc-screen .hl { color: #F59E0B; font-weight: 700; }
-        .soc-btn { display: inline-block; font-family: 'Orbitron', monospace; font-weight: 700; font-size: clamp(12px,3.2vw,16px); padding: clamp(10px,2.5vw,16px) clamp(20px,5vw,40px); border: none; border-radius: 50px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: transform 0.15s, box-shadow 0.15s; min-height: 44px; -webkit-tap-highlight-color: transparent; }
-        .soc-btn:active { transform: scale(0.95) !important; }
-        .soc-btn-play { background: linear-gradient(135deg, #EF4444, #B91C1C); color: #fff; box-shadow: 0 0 20px rgba(239,68,68,0.4); }
-        .soc-btn-play:hover { transform: scale(1.05); box-shadow: 0 0 30px rgba(239,68,68,0.6); }
-        .soc-btn-share { background: linear-gradient(135deg, #F59E0B, #D97706); color: #000; box-shadow: 0 0 20px rgba(245,158,11,0.3); }
-        .soc-btn-share:hover { transform: scale(1.05); }
-        .soc-btn-sec { background: rgba(239,68,68,0.1); color: #EF4444; border: 1px solid rgba(239,68,68,0.3); }
-        .soc-btn-sec:hover { background: rgba(239,68,68,0.2); }
-        .soc-faction-row { display: flex; gap: clamp(8px,2vw,16px); justify-content: center; margin: clamp(8px,2vw,14px) 0; }
-        .soc-faction { padding: clamp(10px,2.5vw,16px) clamp(14px,3vw,24px); border-radius: 14px; border: 2px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); cursor: pointer; transition: all 0.2s; text-align: center; flex: 1; max-width: 160px; }
-        .soc-faction:hover { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.08); }
-        .soc-faction.active-usa { border-color: #3B82F6; background: rgba(59,130,246,0.15); box-shadow: 0 0 20px rgba(59,130,246,0.2); }
-        .soc-faction.active-iran { border-color: #22C55E; background: rgba(34,197,94,0.15); box-shadow: 0 0 20px rgba(34,197,94,0.2); }
-        .soc-faction-emoji { font-size: clamp(24px,6vw,40px); display: block; margin-bottom: 4px; }
-        .soc-faction-name { font-family: 'Orbitron', monospace; font-size: clamp(11px,2.8vw,14px); font-weight: 700; color: #fff; }
-        .soc-faction-desc { font-family: 'Inter', sans-serif; font-size: clamp(9px,2vw,11px); color: #888; margin-top: 2px; }
-        .soc-btn-row { display: flex; flex-direction: column; gap: clamp(8px,2vw,12px); margin-top: clamp(8px,2vw,14px); align-items: center; }
-        .soc-divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(239,68,68,0.3), transparent); margin: clamp(6px,1.5vw,12px) 0; }
-        .soc-label { font-family: 'Inter', sans-serif; font-size: clamp(9px,2.2vw,12px); color: #666; text-transform: uppercase; letter-spacing: 2px; }
-        .soc-score-big { font-family: 'Orbitron', monospace; font-size: clamp(32px,9vw,56px); font-weight: 900; color: #fff; text-shadow: 0 0 20px ${phase.glow}; margin: clamp(2px,0.8vw,6px) 0; }
-        .soc-result { font-family: 'Orbitron', monospace; font-size: clamp(14px,3.5vw,22px); font-weight: 900; padding: clamp(6px,1.5vw,10px); border-radius: 10px; margin: clamp(6px,1.5vw,10px) 0; }
-        .soc-result.win { color: #22C55E; background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.3); }
-        .soc-result.lose { color: #EF4444; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); }
-        .soc-result.tie { color: #F59E0B; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.3); }
-        .soc-hint { animation: pulse 2.5s ease-in-out infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+        
+        .soc-btn { display: inline-block; font-family: 'Orbitron', monospace; font-weight: 700; font-size: 14px; padding: 14px 28px; border: none; border-radius: 8px; cursor: pointer; text-transform: uppercase; letter-spacing: 1.5px; transition: all 0.2s; min-height: 48px; position: relative; overflow: hidden; }
+        .soc-btn-play { background: #EF4444; color: #fff; box-shadow: 0 4px 15px rgba(239,68,68,0.3); width: 100%; }
+        .soc-btn-play:hover { background: #F87171; transform: translateY(-2px); box-shadow: 0 6px 20px rgba(239,68,68,0.4); }
+        .soc-btn-play::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent); animation: shine 3s infinite; }
+        @keyframes shine { 100% { left: 100%; } }
+
+        .soc-faction-row { display: flex; gap: 12px; justify-content: center; margin: 12px 0; }
+        .soc-faction { padding: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.02); cursor: pointer; transition: all 0.2s; text-align: center; flex: 1; position: relative; }
+        .soc-faction:hover { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); }
+        .soc-faction.active-usa { border-color: #3B82F6; background: rgba(59,130,246,0.1); box-shadow: inset 0 0 15px rgba(59,130,246,0.1); }
+        .soc-faction.active-iran { border-color: #22C55E; background: rgba(34,197,94,0.1); box-shadow: inset 0 0 15px rgba(34,197,94,0.1); }
+        .soc-faction-emoji { font-size: 32px; display: block; margin-bottom: 4px; filter: drop-shadow(0 0 8px rgba(255,255,255,0.2)); }
+        .soc-faction-name { font-family: 'Orbitron', sans-serif; font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+
+        .soc-difficulty-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+        .soc-difficulty { border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #d1d5db; padding: 12px 8px; text-align: center; transition: all 0.2s; cursor: pointer; }
+        .soc-difficulty:hover:not(:disabled) { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
+        .soc-difficulty.active { border-color: #F59E0B; background: rgba(245,158,11,0.08); color: #F59E0B; }
+        .soc-difficulty-name { display: block; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+        .soc-difficulty-meta { display: block; font-family: 'Inter', sans-serif; font-size: 9px; opacity: 0.7; line-height: 1.2; }
+
+        .soc-intel-item { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; text-align: left; background: rgba(255,255,255,0.02); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
+        .soc-intel-icon { font-size: 20px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border-radius: 6px; flex-shrink: 0; }
+        .soc-intel-content h4 { font-family: 'Orbitron', sans-serif; font-size: 12px; margin-bottom: 2px; color: #eee; }
+        .soc-intel-content p { font-size: 11px; margin-bottom: 0; color: #888; line-height: 1.4; }
+
+        .soc-footer { padding: 20px; background: rgba(0,0,0,0.3); border-top: 1px solid rgba(255,255,255,0.05); }
+        .soc-tagline { font-family: 'Inter', sans-serif; font-size: 11px; color: #64748b; margin-top: 4px; letter-spacing: 0.5px; }
+
+        /* Scanline effect */
+        .soc-screen::after { content: " "; display: block; position: absolute; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03)); z-index: 2; background-size: 100% 2px, 3px 100%; pointer-events: none; }
+        
+        .soc-btn-share { background: transparent; border: 1px solid #F59E0B; color: #F59E0B; }
+        .soc-btn-share:hover { background: rgba(245,158,11,0.1); }
+        .soc-btn-sec { background: rgba(255,255,255,0.05); color: #aaa; border: 1px solid rgba(255,255,255,0.1); }
+        
+        .soc-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 16px 0; }
+        .soc-label { font-family: 'Orbitron', sans-serif; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 2px; }
+        .soc-score-big { font-family: 'Orbitron', sans-serif; font-size: 48px; font-weight: 900; color: #fff; margin: 8px 0; }
+        
+        @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+        .soc-hint { animation: pulse 2s infinite; }
         .soc-challenge-banner { background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(245,158,11,0.15)); border: 1px solid rgba(239,68,68,0.3); border-radius: 12px; padding: clamp(8px,2vw,12px); margin-bottom: clamp(8px,1.5vw,12px); }
         .soc-challenge-banner p { margin: 0; font-size: clamp(11px,2.5vw,13px); color: #EF4444; font-weight: 600; }
         .soc-challenge-banner .ts { font-family: 'Orbitron', monospace; font-size: clamp(18px,5vw,28px); font-weight: 900; color: #EF4444; text-shadow: 0 0 10px rgba(239,68,68,0.5); }
@@ -1149,13 +1405,19 @@ const StraitOfChaos = () => {
         @media (max-width: 480px) { .soc-wrap { border: none; border-radius: 0; } }
         .soc-sound-btn { position: absolute; top: 10px; left: 10px; z-index: 20; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #fff; transition: background 0.2s; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
         .soc-sound-btn:hover { background: rgba(255,255,255,0.15); }
-        .soc-stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 8px 0; }
-        .soc-stat { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 4px; text-align: center; }
-        .soc-stat-val { font-family: 'Orbitron', monospace; font-weight: 700; font-size: clamp(14px,3.5vw,20px); color: #fff; }
-        .soc-stat-lbl { font-family: 'Inter', sans-serif; font-size: clamp(8px,2vw,10px); color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+        .soc-stat { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px 4px; text-align: center; }
+        .soc-stat-val { font-family: 'Orbitron', monospace; font-weight: 700; font-size: 18px; color: #fff; }
+        .soc-stat-lbl { font-family: 'Inter', sans-serif; font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+        
+        /* CRT Scanline Overlay */
+        .soc-crt { position: absolute; inset: 0; pointer-events: none; z-index: 5; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02)); background-size: 100% 3px, 3px 100%; opacity: 0.5; }
+        .soc-run-hud { position: absolute; top: 10px; right: 10px; z-index: 21; background: rgba(0,0,0,0.55); border: 1px solid rgba(147,197,253,0.45); border-radius: 10px; padding: 6px 8px; pointer-events: none; text-align: right; max-width: 190px; }
+        .soc-run-level { font-family: 'Orbitron', monospace; color: #BAE6FD; font-size: clamp(9px,2vw,11px); letter-spacing: 0.4px; font-weight: 700; text-transform: uppercase; }
+        .soc-run-upgrade { font-family: 'Inter', sans-serif; color: #CBD5E1; font-size: clamp(8px,1.8vw,10px); margin-top: 1px; }
       `}</style>
 
             <div className="soc-wrap">
+                <div className="soc-crt" />
                 <canvas ref={canvasRef} width={CONFIG.INTERNAL_WIDTH} height={CONFIG.INTERNAL_HEIGHT}
                     onClick={handleCanvasInteraction} onTouchStart={handleCanvasInteraction} onTouchEnd={handleTouchEnd} />
 
@@ -1165,6 +1427,14 @@ const StraitOfChaos = () => {
                 </div>
 
                 {gameState === 'PLAYING' && <div className="soc-score">{score}</div>}
+                {gameState === 'PLAYING' && (
+                    <div className="soc-run-hud">
+                        <div className="soc-run-level">{difficultyProfile.label} Level</div>
+                        <div className="soc-run-upgrade">
+                            {scoreTier >= MILESTONE_UPGRADES.length ? 'All upgrades unlocked' : `Next upgrade in ${nextMilestoneDelta} towers`}
+                        </div>
+                    </div>
+                )}
 
                 {/* Mobile Ability Buttons */}
                 {gameState === 'PLAYING' && (
@@ -1195,65 +1465,105 @@ const StraitOfChaos = () => {
 
                 {gameState === 'START' && (
                     <div className="soc-overlay">
-                        <div className="soc-screen" style={{ padding: 'clamp(12px,3vw,24px) clamp(10px,2.5vw,20px)' }}>
-                            <h1 style={{ marginBottom: '2px' }}>Strait of Chaos</h1>
-                            <p className="soc-tagline" style={{ marginBottom: 'clamp(6px,1.5vw,10px)' }}>Navigate the world's most dangerous strait.</p>
-
-                            {isChallenge && challengeScore.current !== null && (
-                                <div className="soc-challenge-banner" style={{ marginBottom: '8px', padding: '6px' }}>
-                                    <p>🎯 Beat this score: <span className="ts" style={{ fontSize: 'clamp(16px,4vw,24px)' }}>{challengeScore.current}</span></p>
-                                </div>
-                            )}
-
-                            <p style={{ marginBottom: '4px', fontSize: 'clamp(10px,2.5vw,12px)' }}>Choose your <span className="hl">faction</span></p>
-                            <div className="soc-faction-row" style={{ marginBottom: 'clamp(6px,1.5vw,10px)' }}>
-                                <div className={`soc-faction ${faction === 'USA' ? 'active-usa' : ''}`} onClick={() => selectFaction('USA')} style={{ padding: 'clamp(8px,2vw,12px) clamp(10px,2.5vw,18px)' }}>
-                                    <span className="soc-faction-emoji" style={{ fontSize: 'clamp(20px,5vw,32px)', marginBottom: '2px' }}>🦅</span>
-                                    <div className="soc-faction-name">USA</div>
-                                </div>
-                                <div className={`soc-faction ${faction === 'IRAN' ? 'active-iran' : ''}`} onClick={() => selectFaction('IRAN')} style={{ padding: 'clamp(8px,2vw,12px) clamp(10px,2.5vw,18px)' }}>
-                                    <span className="soc-faction-emoji" style={{ fontSize: 'clamp(20px,5vw,32px)', marginBottom: '2px' }}>🕊️</span>
-                                    <div className="soc-faction-name">IRAN</div>
+                        <div className="soc-screen">
+                            <div className="soc-header">
+                                <h1>Strait of Chaos</h1>
+                                <div className="soc-tabs">
+                                    <button className={`soc-tab-btn ${activeTab === 'MISSION' ? 'active' : ''}`} onClick={() => setActiveTab('MISSION')}>Mission</button>
+                                    <button className={`soc-tab-btn ${activeTab === 'INTEL' ? 'active' : ''}`} onClick={() => setActiveTab('INTEL')}>Intelligence</button>
                                 </div>
                             </div>
 
-                            <div className="soc-divider" style={{ margin: '4px 0' }} />
+                            <div className="soc-body">
+                                {activeTab === 'MISSION' ? (
+                                    <>
+                                        <p style={{ marginTop: '10px' }}>Navigate the world's most dangerous strait.</p>
 
-                            {/* CLEAR HOW TO PLAY */}
-                            <p style={{ color: '#EF4444', fontWeight: 700, fontSize: 'clamp(12px,3vw,15px)', marginBottom: '8px', textAlign: 'center' }}>🎮 HOW TO PLAY</p>
+                                        {isChallenge && challengeScore.current !== null && (
+                                            <div className="soc-challenge-banner" style={{ border: '1px solid rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '12px', padding: '12px', margin: '12px 0' }}>
+                                                <p style={{ margin: 0, fontWeight: 700, color: '#EF4444' }}>DIPLOMATIC CHALLENGE</p>
+                                                <div style={{ fontSize: '28px', fontFamily: 'Orbitron', color: '#fff', margin: '4px 0' }}>{challengeScore.current}</div>
+                                                <p style={{ fontSize: '10px', margin: 0, opacity: 0.8 }}>Score to beat from the opposing faction</p>
+                                            </div>
+                                        )}
 
-                            <div style={{ textAlign: 'left', fontSize: 'clamp(10px,2.5vw,12px)', color: '#ccc', lineHeight: 1.6, marginBottom: '8px' }}>
-                                <p style={{ marginBottom: '6px' }}><span className="hl">TAP / CLICK</span> to flap upward. Release to fall. Navigate between obstacles!</p>
+                                        <div className="soc-section-title">Select Faction</div>
+                                        <div className="soc-faction-row">
+                                            <div className={`soc-faction ${faction === 'USA' ? 'active-usa' : ''}`} onClick={() => selectFaction('USA')}>
+                                                <span className="soc-faction-emoji">🦅</span>
+                                                <div className="soc-faction-name">USA</div>
+                                            </div>
+                                            <div className={`soc-faction ${faction === 'IRAN' ? 'active-iran' : ''}`} onClick={() => selectFaction('IRAN')}>
+                                                <span className="soc-faction-emoji">🕊️</span>
+                                                <div className="soc-faction-name">IRAN</div>
+                                            </div>
+                                        </div>
 
-                                <p style={{ color: '#EF4444', fontWeight: 700, marginBottom: '4px' }}>⚠️ OBSTACLES</p>
-                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '8px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
-                                    <span>🏢</span><span><strong style={{ color: '#EF4444' }}>Missile Towers</strong> — fly between the gaps</span>
-                                    <span>💰</span><span><strong style={{ color: '#F59E0B' }}>Sanctions</strong> — golden walls, slow you down (won't kill!)</span>
-                                    <span>🚀</span><span><strong style={{ color: '#FF4444' }}>Homing Missiles</strong> — chase you! (appear at score 3+)</span>
-                                    <span>🏴‍☠️</span><span><strong style={{ color: '#8B4513' }}>Pirates</strong> — floating ships to dodge (score 7+)</span>
-                                </div>
+                                        <div className="soc-section-title">Choose Difficulty</div>
+                                        <div className="soc-difficulty-row">
+                                            {Object.entries(DIFFICULTY_LEVELS).map(([key, level]) => (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    disabled={isDifficultyLocked}
+                                                    className={`soc-difficulty ${selectedDifficulty === key ? 'active' : ''}`}
+                                                    onClick={() => selectDifficulty(key)}
+                                                >
+                                                    <span className="soc-difficulty-name">{level.label}</span>
+                                                    <span className="soc-difficulty-meta">{level.tagline}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {isDifficultyLocked && <p className="soc-lock-note" style={{ color: '#F59E0B', fontSize: '10px', marginTop: '4px' }}>⚠️ Difficulty locked for challenge fairness.</p>}
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="soc-section-title">Operational Intel</div>
 
-                                <p style={{ color: '#3B82F6', fontWeight: 700, marginBottom: '4px' }}>✨ POWER-UPS (collect to activate!)</p>
-                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '8px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
-                                    <span>🛢️</span><span><strong style={{ color: '#F59E0B' }}>Oil Barrel</strong> — 3s speed boost</span>
-                                    <span>🏳️</span><span><strong style={{ color: '#fff' }}>Peace Treaty</strong> — 5s shield, SMASH through everything!</span>
-                                    <span>🇺🇳</span><span><strong style={{ color: '#3B82F6' }}>UN Resolution</strong> — shrinks drone to dodge easier</span>
-                                </div>
+                                        <div className="soc-intel-item">
+                                            <div className="soc-intel-icon">🎮</div>
+                                            <div className="soc-intel-content">
+                                                <h4>Combat Controls</h4>
+                                                <p><span className="hl">TAP / CLICK</span> to thrust upward. Avoid stalling or hitting obstacles. Gravity is your enemy.</p>
+                                            </div>
+                                        </div>
 
-                                <p style={{ color: '#00CCCC', fontWeight: 700, marginBottom: '4px' }}>🎯 SPECIAL MOVES</p>
-                                <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: '3px 6px', marginBottom: '6px', fontSize: 'clamp(9px,2.2vw,11px)' }}>
-                                    <span>🔄</span><span><strong style={{ color: '#00CCCC' }}>Barrel Roll</strong> — Swipe down / press <strong>S</strong> (4s cooldown)</span>
-                                    <span>⚡</span><span><strong style={{ color: '#00CCCC' }}>EMP Blast</strong> — press <strong>E</strong> (charges after 5 pipes)</span>
-                                </div>
+                                        <div className="soc-intel-item">
+                                            <div className="soc-intel-icon">⚠️</div>
+                                            <div className="soc-intel-content">
+                                                <h4>Hostile Obstacles</h4>
+                                                <p><strong style={{ color: '#EF4444' }}>Missile Towers:</strong> Concrete death. Avoid.<br />
+                                                    <strong style={{ color: '#F59E0B' }}>Sanctions:</strong> Golden walls. They slow you down but don't kill.</p>
+                                            </div>
+                                        </div>
 
-                                <p style={{ fontSize: 'clamp(8px,2vw,10px)', color: '#666' }}>
-                                    🔥 Streak combos • 💀 Near-miss bonus • 🏺 Trump commentary on death
-                                </p>
+                                        <div className="soc-intel-item">
+                                            <div className="soc-intel-icon">✨</div>
+                                            <div className="soc-intel-content">
+                                                <h4>Field Assets</h4>
+                                                <p><strong style={{ color: '#F59E0B' }}>Oil:</strong> Speed boost.<br />
+                                                    <strong style={{ color: '#fff' }}>Peace Treaty:</strong> 5s Invulnerability shield.</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="soc-intel-item">
+                                            <div className="soc-intel-icon">🎯</div>
+                                            <div className="soc-intel-content">
+                                                <h4>Advance Maneuvers</h4>
+                                                <p><strong style={{ color: '#00CCCC' }}>Barrel Roll (S):</strong> Phase through threats.<br />
+                                                    <strong style={{ color: '#00CCCC' }}>EMP (E):</strong> Clear local airspace.</p>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
-                            <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none', width: '100%', marginTop: '4px' }}>
-                                {isChallenge ? '⚔️ Accept Challenge' : '▶ Deploy Drone'}
-                            </button>
+                            <div className="soc-footer">
+                                <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none' }}>
+                                    {isChallenge ? 'Accept Challenge' : 'Begin Deployment'}
+                                </button>
+                                <p className="soc-tagline">Authorized personnel only beyond this point.</p>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -1261,47 +1571,60 @@ const StraitOfChaos = () => {
                 {gameState === 'GAMEOVER' && (
                     <div className="soc-overlay">
                         <div className="soc-screen">
-                            <h1 style={{ color: '#EF4444' }}>Mission Failed</h1>
-                            <div className="soc-label">Obstacles Cleared</div>
-                            <div className="soc-score-big">{score}</div>
-                            <div className="soc-divider" />
-                            <div className="soc-label">Best Record</div>
-                            <div style={{ fontFamily: "'Orbitron', monospace", fontSize: 'clamp(16px,4.5vw,24px)', fontWeight: 700, color: '#F59E0B', textShadow: '0 0 10px rgba(245,158,11,0.4)', marginBottom: '4px' }}>
-                                {highScore}
+                            <div className="soc-header" style={{ padding: '20px' }}>
+                                <h1 style={{ color: score >= (challengeScore.current || 0) ? '#22C55E' : '#EF4444' }}>
+                                    {isChallenge ? (score >= challengeScore.current ? 'Victory' : 'Defeated') : 'Mission Ended'}
+                                </h1>
                             </div>
 
-                            {isChallenge && challengeScore.current !== null && (
-                                <>
-                                    <div className="soc-divider" />
-                                    <div className="soc-label">vs Rival Nation</div>
-                                    <div style={{ fontFamily: "'Orbitron', monospace", fontSize: 'clamp(14px,3.5vw,20px)', color: '#EF4444', margin: '4px 0' }}>
-                                        {challengeScore.current}
-                                    </div>
-                                    <div className={`soc-result ${score > challengeScore.current ? 'win' : score < challengeScore.current ? 'lose' : 'tie'}`}>
-                                        {score > challengeScore.current ? '🏆 MISSION ACCOMPLISHED!' : score < challengeScore.current ? '💀 STAND DOWN' : '🤝 CEASEFIRE!'}
-                                    </div>
-                                </>
-                            )}
+                            <div className="soc-body">
+                                <div className="soc-label" style={{ marginBottom: '4px' }}>Obstacles Cleared</div>
+                                <div className="soc-score-big" style={{ fontSize: '64px', textShadow: `0 0 20px ${phase.glow}` }}>{score}</div>
 
-                            <div className="soc-divider" />
-                            <div className="soc-stats-grid">
-                                <div className="soc-stat">
-                                    <div className="soc-stat-val" style={{ color: '#FF8800' }}>🔥 {bestStreakRef.current}</div>
-                                    <div className="soc-stat-lbl">Best Streak</div>
+                                <div className="soc-stats-grid">
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val" style={{ color: '#F59E0B' }}>{highScore}</div>
+                                        <div className="soc-stat-lbl">Record</div>
+                                    </div>
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val" style={{ color: '#3B82F6' }}>{scoreTier}</div>
+                                        <div className="soc-stat-lbl">Tier</div>
+                                    </div>
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val" style={{ color: '#EF4444' }}>{streakRef.current}</div>
+                                        <div className="soc-stat-lbl">Final Streak</div>
+                                    </div>
                                 </div>
-                                <div className="soc-stat">
-                                    <div className="soc-stat-val" style={{ color: '#FFD700' }}>💀 {nearMissCountRef.current}</div>
-                                    <div className="soc-stat-lbl">Near Misses</div>
-                                </div>
-                                <div className="soc-stat">
-                                    <div className="soc-stat-val" style={{ color: '#FF4444' }}>🚀 {missilesDodgedRef.current}</div>
-                                    <div className="soc-stat-lbl">Missiles Dodged</div>
+
+                                {isChallenge && challengeScore.current !== null && (
+                                    <div className={`soc-result ${score >= challengeScore.current ? 'win' : 'lose'}`} style={{ margin: '16px 0', padding: '12px' }}>
+                                        <div className="soc-label" style={{ color: 'inherit', marginBottom: '4px' }}>Vs Rival Nation</div>
+                                        <div style={{ fontSize: '20px', fontWeight: 900 }}>{score >= challengeScore.current ? 'MISSION ACCOMPLISHED 🏆' : 'STRATEGIC FAILURE 💀'}</div>
+                                    </div>
+                                )}
+
+                                <div className="soc-section-title">Performance Metrics</div>
+                                <div className="soc-stats-grid">
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val">🔥 {bestStreakRef.current}</div>
+                                        <div className="soc-stat-lbl">Max Streak</div>
+                                    </div>
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val">💀 {nearMissCountRef.current}</div>
+                                        <div className="soc-stat-lbl">Near Miss</div>
+                                    </div>
+                                    <div className="soc-stat">
+                                        <div className="soc-stat-val">🚀 {missilesDodgedRef.current}</div>
+                                        <div className="soc-stat-lbl">Dodge</div>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="soc-btn-row">
-                                <button className="soc-btn soc-btn-play" onClick={startGame}>↻ Redeploy</button>
-                                <button className="soc-btn soc-btn-share" onClick={() => setShowShareModal(true)}>⚔️ Diplomatic Challenge</button>
+                            <div className="soc-footer">
+                                <div className="soc-btn-row" style={{ display: 'flex', gap: '10px' }}>
+                                    <button className="soc-btn soc-btn-play" onClick={startGame} style={{ flex: 1 }}>Re-Deploy</button>
+                                    <button className="soc-btn soc-btn-share" onClick={() => setShowShareModal(true)} style={{ flex: 1 }}>Share Intel</button>
+                                </div>
                             </div>
                         </div>
                     </div>
