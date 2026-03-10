@@ -59,29 +59,31 @@ const TRUMP_QUOTES = [
 const DIFFICULTY_LEVELS = {
     EASY: {
         label: 'Easy',
-        tagline: 'Wide gaps, slower pace',
-        gravity: 0.165,
-        flapStrength: -3.65,
-        speedStart: 0.72,
-        maxSpeed: 1.55,
-        spawnRateStart: 240,
-        minSpawnRate: 165,
-        gapStart: 190,
-        minGap: 150,
-        speedInc: 0.22,
-        spawnStep: 4,
-        gapStep: 1.5,
+        tagline: 'Slow pull, slower pace',
+        gravity: 0.115,
+        maxFallVelocity: 2.6,
+        flapStrength: -3.25,
+        speedStart: 0.74,
+        maxSpeed: 1.52,
+        spawnRateStart: 236,
+        minSpawnRate: 170,
+        gapStart: 205,
+        minGap: 165,
+        speedInc: 0.19,
+        spawnStep: 3,
+        gapStep: 1.2,
         sanctionEvery: 6,
-        missileStartScore: 5,
-        missileSpawnEvery: 420,
-        pirateStartScore: 10,
-        pirateSpawnEvery: 420,
-        powerupChance: 0.42,
+        missileStartScore: 6,
+        missileSpawnEvery: 460,
+        pirateStartScore: 12,
+        pirateSpawnEvery: 460,
+        powerupChance: 0.48,
     },
     MEDIUM: {
         label: 'Medium',
         tagline: 'Balanced chaos',
         gravity: 0.18,
+        maxFallVelocity: 3.5,
         flapStrength: -3.8,
         speedStart: 0.8,
         maxSpeed: 1.8,
@@ -103,6 +105,7 @@ const DIFFICULTY_LEVELS = {
         label: 'Hard',
         tagline: 'Tight gaps, heavy pressure',
         gravity: 0.2,
+        maxFallVelocity: 4.2,
         flapStrength: -3.95,
         speedStart: 0.92,
         maxSpeed: 2.25,
@@ -128,8 +131,152 @@ const MILESTONE_UPGRADES = [
     { score: 30, name: 'Tactical AI Core', effect: 'More power-up drops and longer Peace shield', headline: '30 towers reached: Tactical AI Core activated' },
 ];
 
+const RUN_MODIFIERS = {
+    NONE: { label: 'Standard', desc: 'No modifier' },
+    SHIELD_PLUS: { label: 'Shield+', desc: 'Longer Peace shield' },
+    EMP_PLUS: { label: 'EMP+', desc: 'Lower EMP charge requirement' },
+    SPEED_PLUS: { label: 'Speed+', desc: 'Longer Oil boost' },
+};
+
+const DAILY_MEDAL_TARGETS = {
+    EASY: { bronze: 8, silver: 16, gold: 24 },
+    MEDIUM: { bronze: 7, silver: 14, gold: 21 },
+    HARD: { bronze: 6, silver: 12, gold: 18 },
+};
+
+const PATTERN_LIBRARY = {
+    EASY: [
+        { pattern: 'wide', minScore: 0, weight: 4.8 },
+        { pattern: 'normal', minScore: 0, weight: 4.2 },
+        { pattern: 'narrow', minScore: 6, weight: 1.1 },
+        { pattern: 'one_sided', minScore: 9, weight: 0.8 },
+        { pattern: 'moving', minScore: 15, weight: 0.4 },
+        { pattern: 'staggered', minScore: 18, weight: 0.35 },
+    ],
+    MEDIUM: [
+        { pattern: 'wide', minScore: 0, weight: 2.8 },
+        { pattern: 'normal', minScore: 0, weight: 3.5 },
+        { pattern: 'narrow', minScore: 2, weight: 1.8 },
+        { pattern: 'one_sided', minScore: 4, weight: 1.4 },
+        { pattern: 'moving', minScore: 9, weight: 1.1 },
+        { pattern: 'staggered', minScore: 11, weight: 0.9 },
+    ],
+    HARD: [
+        { pattern: 'wide', minScore: 0, weight: 1.5 },
+        { pattern: 'normal', minScore: 0, weight: 2.1 },
+        { pattern: 'narrow', minScore: 1, weight: 2.5 },
+        { pattern: 'one_sided', minScore: 2, weight: 1.9 },
+        { pattern: 'moving', minScore: 5, weight: 1.8 },
+        { pattern: 'staggered', minScore: 7, weight: 1.5 },
+    ],
+};
+
+const HIGH_RISK_PATTERNS = new Set(['narrow', 'moving', 'staggered']);
+const RELIEF_PATTERNS = new Set(['wide', 'normal']);
+const DEATH_REASON_DETAILS = {
+    TOP_WALL: { label: 'Ceiling impact', tip: 'Tap slightly later to avoid over-climbing.' },
+    BOTTOM_WALL: { label: 'Sea-level crash', tip: 'Use shorter taps to stay centered in the lane.' },
+    TOWER_COLLISION: { label: 'Missile tower collision', tip: 'Prioritize lane alignment before speed.' },
+    MISSILE_HIT: { label: 'Missile lock impact', tip: 'Bait missiles into towers or hold EMP for pressure spikes.' },
+    PIRATE_COLLISION: { label: 'Pirate interception', tip: 'Treat pirates as moving towers and pre-position early.' },
+    UNKNOWN: { label: 'Mission failure', tip: 'Stabilize first, then push score.' },
+};
+
 const HIGH_SCORE_STORAGE_KEY = 'straitChaosHighScoresByDifficulty';
+const DAILY_SCORE_STORAGE_KEY = 'straitChaosDailyScoresByDifficulty';
+const ACCESSIBILITY_STORAGE_KEY = 'straitChaosAccessibilityPrefs';
+const TUTORIAL_STORAGE_KEY = 'straitChaosTutorialSeenV1';
 const DEFAULT_DIFFICULTY = 'MEDIUM';
+const DEFAULT_RUN_MODE = 'CLASSIC';
+const TUTORIAL_TOTAL_FRAMES = 1200; // 20s at 60fps target
+const TUTORIAL_STEPS = [
+    { key: 'FLAP', title: 'Step 1: Tap to Fly', detail: 'Tap/click 3 times to control altitude.' },
+    { key: 'ROLL', title: 'Step 2: Barrel Roll', detail: 'Press S or swipe down once.' },
+    { key: 'EMP', title: 'Step 3: EMP', detail: 'Press E to fire EMP (precharged in tutorial).' },
+];
+
+function getLocalDateKey(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function hashStringToSeed(input) {
+    let h = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        h ^= input.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0) % 2147483647;
+}
+
+function getDailyMission(levelKey) {
+    const normalized = parseDifficulty(levelKey) || DEFAULT_DIFFICULTY;
+    const dateKey = getLocalDateKey();
+    return {
+        dateKey,
+        seed: hashStringToSeed(`soc-daily-${dateKey}-${normalized}`),
+        medals: DAILY_MEDAL_TARGETS[normalized],
+    };
+}
+
+function getDailyScoreKey(dateKey, levelKey) {
+    return `${dateKey}|${levelKey}`;
+}
+
+function readDailyScores() {
+    try {
+        const raw = localStorage.getItem(DAILY_SCORE_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function readAccessibilityPrefs() {
+    const fallback = { reducedMotion: false, largeUI: false, highContrast: false };
+    try {
+        const raw = localStorage.getItem(ACCESSIBILITY_STORAGE_KEY);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return {
+            reducedMotion: Boolean(parsed?.reducedMotion),
+            largeUI: Boolean(parsed?.largeUI),
+            highContrast: Boolean(parsed?.highContrast),
+        };
+    } catch {
+        return fallback;
+    }
+}
+
+function getMedalForScore(score, medals) {
+    if (!medals) return 'None';
+    if (score >= medals.gold) return 'Gold';
+    if (score >= medals.silver) return 'Silver';
+    if (score >= medals.bronze) return 'Bronze';
+    return 'None';
+}
+
+function getDeathReportFromReason(reason) {
+    return DEATH_REASON_DETAILS[reason] || DEATH_REASON_DETAILS.UNKNOWN;
+}
+
+function pickPatternForLevel(levelKey, score, randomValue, forceRelief = false) {
+    const library = PATTERN_LIBRARY[levelKey] || PATTERN_LIBRARY[DEFAULT_DIFFICULTY];
+    const eligible = library.filter((entry) => score >= entry.minScore && (!forceRelief || RELIEF_PATTERNS.has(entry.pattern)));
+    const pool = eligible.length > 0 ? eligible : library.filter((entry) => score >= entry.minScore);
+    if (pool.length === 0) return 'normal';
+    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    let cursor = randomValue * totalWeight;
+    for (const entry of pool) {
+        cursor -= entry.weight;
+        if (cursor <= 0) return entry.pattern;
+    }
+    return pool[pool.length - 1].pattern;
+}
 
 function parseDifficulty(value) {
     if (!value) return null;
@@ -206,16 +353,27 @@ const StraitOfChaos = () => {
     const challengeSeed = useRef(urlParams.current.has('seed') ? parseInt(urlParams.current.get('seed'), 10) : null);
     const challengeScore = useRef(urlParams.current.has('score') ? parseInt(urlParams.current.get('score'), 10) : null);
     const challengeDifficulty = useRef(parseDifficulty(urlParams.current.get('difficulty')));
+    const challengeMode = useRef(urlParams.current.get('mode') === 'daily' ? 'DAILY' : 'CLASSIC');
+    const challengeModifier = useRef(RUN_MODIFIERS[String(urlParams.current.get('modifier')).toUpperCase()] ? String(urlParams.current.get('modifier')).toUpperCase() : 'NONE');
     const isChallenge = challengeSeed.current !== null;
     const isDifficultyLocked = isChallenge && challengeDifficulty.current !== null;
+    const isModeLocked = isChallenge;
 
     const [gameState, setGameState] = useState('START');
     const [score, setScore] = useState(0);
     const [faction, setFaction] = useState(null);
     const [selectedDifficulty, setSelectedDifficulty] = useState(challengeDifficulty.current || DEFAULT_DIFFICULTY);
+    const [runMode, setRunMode] = useState(isChallenge ? challengeMode.current : DEFAULT_RUN_MODE);
+    const [selectedModifier, setSelectedModifier] = useState(isChallenge ? challengeModifier.current : 'NONE');
+    const [accessibility, setAccessibility] = useState(readAccessibilityPrefs);
+    const [needsTutorial, setNeedsTutorial] = useState(() => localStorage.getItem(TUTORIAL_STORAGE_KEY) !== 'done');
+    const [tutorialUi, setTutorialUi] = useState({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0 });
     const [highScores, setHighScores] = useState(readDifficultyHighScores);
+    const [dailyScores, setDailyScores] = useState(readDailyScores);
+    const [deathReport, setDeathReport] = useState({ label: '', tip: '' });
     const [showShareModal, setShowShareModal] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [confirmRestart, setConfirmRestart] = useState(false);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [activeTab, setActiveTab] = useState('MISSION');
     const [soundEnabled, setSoundEnabled] = useState(() => {
@@ -234,6 +392,12 @@ const StraitOfChaos = () => {
     const lastHeadlineIdxRef = useRef(2);
     const factionRef = useRef(null);
     const selectedDifficultyRef = useRef(challengeDifficulty.current || DEFAULT_DIFFICULTY);
+    const runModeRef = useRef(isChallenge ? challengeMode.current : DEFAULT_RUN_MODE);
+    const selectedModifierRef = useRef(isChallenge ? challengeModifier.current : 'NONE');
+    const runMetaRef = useRef({ mode: DEFAULT_RUN_MODE, level: DEFAULT_DIFFICULTY, modifier: 'NONE', dailyDateKey: getLocalDateKey() });
+    const accessibilityRef = useRef(accessibility);
+    const tutorialRef = useRef({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0, completed: false });
+    const visualRandomRef = useRef(createSeededRandom((currentSeedRef.current ^ 0x9e3779b9) >>> 0));
 
     const birdRef = useRef({
         y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
@@ -253,8 +417,19 @@ const StraitOfChaos = () => {
     const bgmRef = useRef(null);
     const soundEnabledRef = useRef(soundEnabled);
     const difficultyRef = useRef(createDifficultyRuntime(selectedDifficultyRef.current));
-    const progressionRef = useRef({ tier: 0, barrelCooldown: 240, empMaxCharge: 5, powerupBonus: 0, shieldBonusFrames: 0 });
+    const progressionRef = useRef({
+        tier: 0,
+        barrelCooldown: 240,
+        empMaxCharge: 5,
+        powerupBonus: 0,
+        shieldBonusFrames: 0,
+        speedBoostBonusFrames: 0,
+        speedBoostMultiplier: 1.5,
+    });
     const milestoneToastRef = useRef({ title: '', detail: '', timer: 0 });
+    const directorRef = useRef({ pressure: 0, reliefSpawns: 0, hardPatternStreak: 0 });
+    const particlePoolRef = useRef([]);
+    const ripplePoolRef = useRef([]);
     const bgImageRef = useRef(null);
     const towerImageRef = useRef(null);
     // Streak & stats refs
@@ -304,6 +479,11 @@ const StraitOfChaos = () => {
     }, [soundEnabled]);
 
     useEffect(() => {
+        accessibilityRef.current = accessibility;
+        localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify(accessibility));
+    }, [accessibility]);
+
+    useEffect(() => {
         if (isDifficultyLocked && challengeDifficulty.current && selectedDifficulty !== challengeDifficulty.current) {
             setSelectedDifficulty(challengeDifficulty.current);
             selectedDifficultyRef.current = challengeDifficulty.current;
@@ -311,37 +491,104 @@ const StraitOfChaos = () => {
     }, [isDifficultyLocked, selectedDifficulty]);
 
     useEffect(() => {
+        if (isModeLocked && runMode !== challengeMode.current) {
+            setRunMode(challengeMode.current);
+            runModeRef.current = challengeMode.current;
+        }
+        if (isModeLocked && selectedModifier !== challengeModifier.current) {
+            setSelectedModifier(challengeModifier.current);
+            selectedModifierRef.current = challengeModifier.current;
+        }
+    }, [isModeLocked, runMode, selectedModifier]);
+
+    useEffect(() => {
         selectedDifficultyRef.current = selectedDifficulty;
     }, [selectedDifficulty]);
 
-    // Use true randomness for regular play, seeded random only for challenge mode
-    const gameRandom = () => isChallenge ? seededRandomRef.current() : Math.random();
+    useEffect(() => {
+        runModeRef.current = runMode;
+    }, [runMode]);
+
+    useEffect(() => {
+        selectedModifierRef.current = selectedModifier;
+    }, [selectedModifier]);
+
+    // Use deterministic random for challenge + daily runs, true randomness for classic
+    const gameRandom = () => (isChallenge || runModeRef.current === 'DAILY') ? seededRandomRef.current() : Math.random();
     const gameRandomRange = (min, max) => gameRandom() * (max - min) + min;
+    const visualRandom = () => (isChallenge || runModeRef.current === 'DAILY') ? visualRandomRef.current() : Math.random();
+
+    const syncTutorialUi = () => {
+        const t = tutorialRef.current;
+        setTutorialUi({
+            active: t.active,
+            stepIndex: t.stepIndex,
+            remainingFrames: t.remainingFrames,
+            flapCount: t.flapCount,
+        });
+    };
 
     const createParticles = (x, y, color, count = 10) => {
         for (let i = 0; i < count; i++) {
-            particlesRef.current.push({ x, y, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5, life: CONFIG.PARTICLE_LIFE, color });
+            const particle = particlePoolRef.current.pop() || { x: 0, y: 0, vx: 0, vy: 0, life: 0, color: '#fff' };
+            particle.x = x;
+            particle.y = y;
+            particle.vx = (visualRandom() - 0.5) * 5;
+            particle.vy = (visualRandom() - 0.5) * 5;
+            particle.life = CONFIG.PARTICLE_LIFE;
+            particle.color = color;
+            particlesRef.current.push(particle);
         }
     };
 
     const resetGame = useCallback(() => {
         const levelKey = isDifficultyLocked ? challengeDifficulty.current : selectedDifficultyRef.current;
         const difficultyRuntime = createDifficultyRuntime(levelKey);
-        currentSeedRef.current = isChallenge ? challengeSeed.current : generateSeed();
+        const mode = isChallenge ? challengeMode.current : runModeRef.current;
+        const dailyMission = getDailyMission(levelKey);
+        const runSeed = isChallenge ? challengeSeed.current : mode === 'DAILY' ? dailyMission.seed : generateSeed();
+        const modifierKey = RUN_MODIFIERS[selectedModifierRef.current] ? selectedModifierRef.current : 'NONE';
+        const baseProgression = {
+            tier: 0,
+            barrelCooldown: 240,
+            empMaxCharge: 5,
+            powerupBonus: 0,
+            shieldBonusFrames: 0,
+            speedBoostBonusFrames: 0,
+            speedBoostMultiplier: 1.5,
+        };
+        if (modifierKey === 'SHIELD_PLUS') baseProgression.shieldBonusFrames += 120;
+        if (modifierKey === 'EMP_PLUS') baseProgression.empMaxCharge = 4;
+        if (modifierKey === 'SPEED_PLUS') {
+            baseProgression.speedBoostBonusFrames = 90;
+            baseProgression.speedBoostMultiplier = 1.7;
+        }
+        currentSeedRef.current = runSeed;
+        runMetaRef.current = {
+            mode,
+            level: levelKey,
+            modifier: modifierKey,
+            dailyDateKey: dailyMission.dateKey,
+        };
         seededRandomRef.current = createSeededRandom(currentSeedRef.current);
+        visualRandomRef.current = createSeededRandom((currentSeedRef.current ^ 0x9e3779b9) >>> 0);
         scoreRef.current = 0;
         birdRef.current = {
             y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
             velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
             shieldActive: false, shieldTimer: 0, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
         };
+        for (const p of particlesRef.current) particlePoolRef.current.push(p);
+        for (const r of touchRipplesRef.current) ripplePoolRef.current.push(r);
         pipesRef.current = []; powerupsRef.current = []; particlesRef.current = [];
         touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = [];
         trumpQuoteRef.current = { text: '', timer: 0 };
         frameCountRef.current = 0;
         difficultyRef.current = difficultyRuntime;
-        progressionRef.current = { tier: 0, barrelCooldown: 240, empMaxCharge: 5, powerupBonus: 0, shieldBonusFrames: 0 };
+        progressionRef.current = baseProgression;
         milestoneToastRef.current = { title: '', detail: '', timer: 0 };
+        directorRef.current = { pressure: 0, reliefSpawns: 0, hardPatternStreak: 0 };
+        tutorialRef.current = { active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0, completed: false };
         newsOffsetRef.current = 0;
         activeHeadlinesRef.current = [NEWS_HEADLINES[0], NEWS_HEADLINES[1], NEWS_HEADLINES[2]];
         lastHeadlineIdxRef.current = 2;
@@ -352,24 +599,81 @@ const StraitOfChaos = () => {
         nearMissTextRef.current = { timer: 0, x: 0, y: 0 };
         barrelRollRef.current = { active: false, timer: 0, cooldown: 0, angle: 0 };
         empRef.current = { charge: 0, maxCharge: progressionRef.current.empMaxCharge, blastTimer: 0, blastX: 0, blastY: 0 };
+        setConfirmRestart(false);
+        setTutorialUi({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0 });
+        setDeathReport({ label: '', tip: '' });
         setScore(0); setShowShareModal(false); setCopied(false); setGameState('START');
     }, [isChallenge, isDifficultyLocked]);
 
     const startGame = useCallback(() => {
         if (!factionRef.current) return;
         resetGame();
-        if (!isChallenge) { currentSeedRef.current = generateSeed(); seededRandomRef.current = createSeededRandom(currentSeedRef.current); }
+        if (!isChallenge && needsTutorial) {
+            tutorialRef.current = { active: true, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0, completed: false };
+            syncTutorialUi();
+        }
         // Start background music
-        if (bgmRef.current) { bgmRef.current.currentTime = 0; bgmRef.current.volume = 0.3; bgmRef.current.play().catch(() => { }); }
+        if (bgmRef.current) {
+            bgmRef.current.currentTime = 0;
+            bgmRef.current.volume = 0.24;
+            bgmRef.current.playbackRate = 1;
+            bgmRef.current.play().catch(() => { });
+        }
         trackGameStart('Strait of Chaos');
         setGameState('PLAYING');
-    }, [resetGame, isChallenge]);
+    }, [isChallenge, needsTutorial, resetGame]);
+
+    const pauseGame = useCallback(() => {
+        setConfirmRestart(false);
+        setGameState('PAUSED');
+        if (bgmRef.current) bgmRef.current.pause();
+    }, []);
+
+    const resumeGame = useCallback(() => {
+        setGameState('PLAYING');
+        if (bgmRef.current && soundEnabledRef.current) bgmRef.current.play().catch(() => { });
+    }, []);
+
+    const requestRestart = useCallback(() => {
+        setConfirmRestart(true);
+    }, []);
+
+    const cancelRestart = useCallback(() => {
+        setConfirmRestart(false);
+    }, []);
+
+    const confirmRestartRun = useCallback(() => {
+        setConfirmRestart(false);
+        startGame();
+    }, [startGame]);
+
+    const quitToBriefing = useCallback(() => {
+        setConfirmRestart(false);
+        resetGame();
+    }, [resetGame]);
+
+    const completeTutorial = useCallback(() => {
+        tutorialRef.current.active = false;
+        tutorialRef.current.completed = true;
+        syncTutorialUi();
+        setNeedsTutorial(false);
+        localStorage.setItem(TUTORIAL_STORAGE_KEY, 'done');
+        milestoneToastRef.current = { title: 'TUTORIAL COMPLETE', detail: 'You are combat-ready. Good luck, pilot.', timer: 150 };
+    }, []);
 
     const flap = useCallback(() => {
         const bird = birdRef.current;
         const f = factionRef.current || FACTIONS.USA;
         bird.velocity = difficultyRef.current.profile.flapStrength;
         createParticles(bird.x, bird.y, f.color, 5);
+        const t = tutorialRef.current;
+        if (t.active && t.stepIndex === 0) {
+            t.flapCount = Math.min(3, t.flapCount + 1);
+            if (t.flapCount >= 3) {
+                t.stepIndex = 1;
+            }
+            syncTutorialUi();
+        }
     }, []);
 
     const triggerBarrelRoll = useCallback(() => {
@@ -380,6 +684,12 @@ const StraitOfChaos = () => {
         br.cooldown = progressionRef.current.barrelCooldown;
         br.angle = 0;
         createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 10);
+        const t = tutorialRef.current;
+        if (t.active && t.stepIndex === 1) {
+            t.stepIndex = 2;
+            empRef.current.charge = empRef.current.maxCharge;
+            syncTutorialUi();
+        }
     }, []);
 
     const triggerEMP = useCallback(() => {
@@ -397,16 +707,22 @@ const StraitOfChaos = () => {
         });
         missilesRef.current = [];
         createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 25);
-    }, []);
+        const t = tutorialRef.current;
+        if (t.active && t.stepIndex === 2) {
+            completeTutorial();
+        }
+    }, [completeTutorial]);
 
     const addTouchRipple = (cx, cy) => {
         const canvas = canvasRef.current; if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
-        touchRipplesRef.current.push({
-            x: (cx - rect.left) * (CONFIG.INTERNAL_WIDTH / rect.width),
-            y: (cy - rect.top) * (CONFIG.INTERNAL_HEIGHT / rect.height),
-            radius: 0, maxRadius: 40, life: 20,
-        });
+        const ripple = ripplePoolRef.current.pop() || { x: 0, y: 0, radius: 0, maxRadius: 40, life: 0 };
+        ripple.x = (cx - rect.left) * (CONFIG.INTERNAL_WIDTH / rect.width);
+        ripple.y = (cy - rect.top) * (CONFIG.INTERNAL_HEIGHT / rect.height);
+        ripple.radius = 0;
+        ripple.maxRadius = 40;
+        ripple.life = 20;
+        touchRipplesRef.current.push(ripple);
     };
 
     const POWERUP_TYPES = {
@@ -417,15 +733,21 @@ const StraitOfChaos = () => {
 
     const activatePowerup = (type) => {
         if (type === 'PEACE') { birdRef.current.shieldActive = true; birdRef.current.shieldTimer = 300 + progressionRef.current.shieldBonusFrames; }
-        if (type === 'OIL') birdRef.current.speedBoostTimer = 180;
+        if (type === 'OIL') birdRef.current.speedBoostTimer = 180 + progressionRef.current.speedBoostBonusFrames;
         if (type === 'UN') birdRef.current.shrinkTimer = 300;
     };
 
-    const gameOver = useCallback(() => {
+    const gameOver = useCallback((reason = 'UNKNOWN') => {
+        if (tutorialRef.current.active) {
+            tutorialRef.current.active = false;
+            syncTutorialUi();
+        }
         setGameState('GAMEOVER');
         const fs = scoreRef.current;
         const levelKey = difficultyRef.current.level || selectedDifficultyRef.current;
+        const death = getDeathReportFromReason(reason);
         setScore(fs);
+        setDeathReport(death);
         trackGameEnd('Strait of Chaos', fs);
         setHighScores(prev => {
             const currentBest = getDifficultyHighScore(prev, levelKey);
@@ -434,6 +756,16 @@ const StraitOfChaos = () => {
             localStorage.setItem(HIGH_SCORE_STORAGE_KEY, JSON.stringify(next));
             return next;
         });
+        if (!isChallenge && runMetaRef.current.mode === 'DAILY') {
+            const dailyKey = getDailyScoreKey(runMetaRef.current.dailyDateKey, levelKey);
+            setDailyScores(prev => {
+                const currentBest = Number.isFinite(prev?.[dailyKey]) ? prev[dailyKey] : 0;
+                if (fs <= currentBest) return prev;
+                const next = { ...prev, [dailyKey]: fs };
+                localStorage.setItem(DAILY_SCORE_STORAGE_KEY, JSON.stringify(next));
+                return next;
+            });
+        }
         // Save best streak
         if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
         // Lower music volume
@@ -445,10 +777,10 @@ const StraitOfChaos = () => {
         }
         // Show Trump quote
         trumpQuoteRef.current = {
-            text: TRUMP_QUOTES[Math.floor(Math.random() * TRUMP_QUOTES.length)],
+            text: TRUMP_QUOTES[Math.floor(visualRandom() * TRUMP_QUOTES.length)],
             timer: 180,
         };
-    }, []);
+    }, [isChallenge]);
 
     const applyMilestoneUpgrades = useCallback(() => {
         const targetTier = Math.min(MILESTONE_UPGRADES.length, Math.floor(scoreRef.current / 10));
@@ -483,20 +815,37 @@ const StraitOfChaos = () => {
     const update = useCallback(() => {
         frameCountRef.current++;
         applyMilestoneUpgrades();
+        const tutorial = tutorialRef.current;
+        if (tutorial.active) {
+            tutorial.remainingFrames = Math.max(0, tutorial.remainingFrames - 1);
+            if (tutorial.stepIndex === 2 && empRef.current.charge < empRef.current.maxCharge) {
+                empRef.current.charge = empRef.current.maxCharge;
+            }
+            if (frameCountRef.current % 10 === 0) syncTutorialUi();
+            if (tutorial.remainingFrames <= 0) {
+                completeTutorial();
+            }
+        }
         const bird = birdRef.current;
         const difficulty = difficultyRef.current;
         const profile = difficulty.profile;
+        const accessibilityPrefs = accessibilityRef.current;
 
-        if (frameCountRef.current % CONFIG.DIFFICULTY_INTERVAL === 0) {
+        if (!tutorial.active && frameCountRef.current % CONFIG.DIFFICULTY_INTERVAL === 0) {
             difficulty.speed = Math.min(difficulty.speed + difficulty.speedInc, difficulty.maxSpeed);
             difficulty.spawnRate = Math.max(difficulty.spawnRate - difficulty.spawnStep, difficulty.minSpawnRate);
             difficulty.gapSize = Math.max(difficulty.gapSize - difficulty.gapStep, difficulty.minGapSize);
         }
 
-        let currentSpeed = bird.speedBoostTimer > 0 ? difficulty.speed * 1.5 : difficulty.speed;
+        let currentSpeed = bird.speedBoostTimer > 0 ? difficulty.speed * progressionRef.current.speedBoostMultiplier : difficulty.speed;
+        if (tutorial.active) currentSpeed *= 0.78;
         if (bird.sanctionSlowTimer > 0) { currentSpeed *= 0.5; bird.sanctionSlowTimer--; }
 
         bird.velocity += profile.gravity;
+        if (Number.isFinite(profile.maxFallVelocity)) {
+            bird.velocity = Math.min(bird.velocity, profile.maxFallVelocity);
+        }
+        if (tutorial.active) bird.velocity *= 0.96;
         bird.y += bird.velocity;
         bird.propAngle += 0.3;
 
@@ -516,7 +865,7 @@ const StraitOfChaos = () => {
                 bird.shieldActive = false; bird.velocity *= -0.5;
                 bird.y = hitTop ? bird.radius + 1 : CONFIG.INTERNAL_HEIGHT - bird.radius - 1;
                 createParticles(bird.x, bird.y, '#FFFFFF', 15);
-            } else { gameOver(); return; }
+            } else { gameOver(hitTop ? 'TOP_WALL' : 'BOTTOM_WALL'); return; }
         }
 
         if (bird.speedBoostTimer > 0) bird.speedBoostTimer--;
@@ -530,24 +879,30 @@ const StraitOfChaos = () => {
 
         // Spawn pipes — randomized patterns
         if (frameCountRef.current % Math.round(difficulty.spawnRate) === 0) {
+            const director = directorRef.current;
             const missileGapBonus = missilesRef.current.length > 0 ? CONFIG.MISSILE_GAP_BONUS : 0;
             const gap = difficulty.gapSize + missileGapBonus;
             const topH = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
             const pipeCount = pipesRef.current.filter(p => p.passed).length + pipesRef.current.length;
             const isSanction = (pipeCount + 1) % profile.sanctionEvery === 0;
-
-            // Pick pattern based on score (more variety at all scores)
-            const roll = gameRandom();
             const sc = scoreRef.current;
-            let pattern = 'normal';
-            if (sc >= 10 && roll < 0.15) pattern = 'moving';
-            else if (sc >= 7 && roll < 0.28) pattern = 'staggered';
-            else if (sc >= 2 && roll < 0.42) pattern = 'one_sided';
-            else if (roll < 0.58) pattern = 'narrow';
-            else if (roll < 0.75) pattern = 'wide';
+            const threatLoad = (missilesRef.current.length > 0 ? 1 : 0) + (piratesRef.current.length > 0 ? 1 : 0) + (missilesRef.current.length > 2 ? 1 : 0);
+            director.pressure = Math.max(0, director.pressure - 0.04 + threatLoad * 0.12 + (difficulty.speed > profile.speedStart + 0.35 ? 0.05 : 0));
+            const forceRelief = director.reliefSpawns > 0 || director.pressure > 1.05;
+            let pattern = tutorial.active ? ((pipeCount + frameCountRef.current) % 2 === 0 ? 'wide' : 'normal') : pickPatternForLevel(difficulty.level, sc, gameRandom(), forceRelief);
+            if (threatLoad >= 2 && HIGH_RISK_PATTERNS.has(pattern)) pattern = 'normal';
+            if (pattern === 'staggered' && forceRelief) pattern = 'normal';
+            if (HIGH_RISK_PATTERNS.has(pattern)) director.hardPatternStreak++;
+            else director.hardPatternStreak = 0;
+            if (director.hardPatternStreak >= 3) {
+                director.reliefSpawns = Math.max(director.reliefSpawns, 2);
+                director.hardPatternStreak = 0;
+            }
+            if (forceRelief && director.reliefSpawns > 0) director.reliefSpawns--;
 
+            const fairGapBonus = (forceRelief ? 18 : 0) + (threatLoad >= 2 ? 8 : 0) + (tutorial.active ? 22 : 0);
             const pipeW = pattern === 'narrow' ? 35 : pattern === 'wide' ? 70 : 50;
-            const pipeGap = pattern === 'narrow' ? gap + 20 : gap;
+            const pipeGap = (pattern === 'narrow' ? gap + 20 : gap) + fairGapBonus;
             const adjTopH = pattern === 'narrow' ? gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - pipeGap - 50) : topH;
             const adjBottomY = adjTopH + pipeGap;
 
@@ -565,15 +920,15 @@ const StraitOfChaos = () => {
 
             // Staggered double: add a second pipe nearby with offset gap
             if (pattern === 'staggered') {
-                const topH2 = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - gap - 50);
+                const topH2 = gameRandomRange(50, CONFIG.INTERNAL_HEIGHT - pipeGap - 50);
                 pipesRef.current.push({
-                    x: CONFIG.INTERNAL_WIDTH + 80, topHeight: topH2, bottomY: topH2 + gap,
+                    x: CONFIG.INTERNAL_WIDTH + 80, topHeight: topH2, bottomY: topH2 + pipeGap,
                     width: 50, passed: false, isSanction: false, pattern: 'normal',
                     movingDir: 0, movingSpeed: 0, oneSide: null,
                 });
             }
 
-            const powerupChance = Math.min(0.75, profile.powerupChance + progressionRef.current.powerupBonus);
+            const powerupChance = Math.min(0.85, profile.powerupChance + progressionRef.current.powerupBonus + (forceRelief ? 0.08 : 0) + (tutorial.active ? 0.12 : 0));
             if (gameRandom() < powerupChance) {
                 const types = ['PEACE', 'OIL', 'UN'];
                 const type = types[Math.floor(gameRandom() * types.length)];
@@ -610,6 +965,8 @@ const StraitOfChaos = () => {
                     bird.sanctionSlowTimer = 90;
                     createParticles(bird.x, bird.y, '#F59E0B', 8);
                     pipesRef.current.splice(i, 1);
+                    directorRef.current.reliefSpawns = Math.max(directorRef.current.reliefSpawns, 1);
+                    directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.25);
                     if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
                     streakRef.current = Math.max(0, streakRef.current - 1);
                     if (SCORE_HEADLINES[scoreRef.current]) {
@@ -625,12 +982,13 @@ const StraitOfChaos = () => {
                     if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
                     continue;
                 } else {
-                    gameOver(); return;
+                    gameOver('TOWER_COLLISION'); return;
                 }
             }
 
             if (!pipe.passed && bL > pR) {
                 pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.07);
                 // Streak
                 streakRef.current++;
                 if (streakRef.current > bestStreakRef.current) bestStreakRef.current = streakRef.current;
@@ -668,18 +1026,24 @@ const StraitOfChaos = () => {
         // Particles & ripples
         for (let i = particlesRef.current.length - 1; i >= 0; i--) {
             const p = particlesRef.current[i]; p.x += p.vx; p.y += p.vy; p.life--;
-            if (p.life <= 0) particlesRef.current.splice(i, 1);
+            if (p.life <= 0) {
+                const [recycled] = particlesRef.current.splice(i, 1);
+                particlePoolRef.current.push(recycled);
+            }
         }
         for (let i = touchRipplesRef.current.length - 1; i >= 0; i--) {
             const r = touchRipplesRef.current[i]; r.radius += 2; r.life--;
-            if (r.life <= 0) touchRipplesRef.current.splice(i, 1);
+            if (r.life <= 0) {
+                const [recycled] = touchRipplesRef.current.splice(i, 1);
+                ripplePoolRef.current.push(recycled);
+            }
         }
 
         // News ticker scroll
         newsOffsetRef.current += 0.8;
 
         // Spawn homing missiles (after score 3, every ~400 frames, with warning)
-        if (scoreRef.current >= profile.missileStartScore && frameCountRef.current % profile.missileSpawnEvery === 0) {
+        if (!tutorial.active && scoreRef.current >= profile.missileStartScore && frameCountRef.current % profile.missileSpawnEvery === 0) {
             const side = gameRandom() > 0.5 ? 'right' : 'top';
             missilesRef.current.push({
                 x: side === 'right' ? CONFIG.INTERNAL_WIDTH + 20 : gameRandomRange(100, CONFIG.INTERNAL_WIDTH - 50),
@@ -688,6 +1052,8 @@ const StraitOfChaos = () => {
                 life: 300, age: 0, trackingLife: 120, // stops homing after 120 frames (~2 sec)
                 trail: [], warning: 60, // 60 frames of warning before active
             });
+            directorRef.current.pressure += 0.18;
+            if (missilesRef.current.length >= 3) directorRef.current.reliefSpawns = Math.max(directorRef.current.reliefSpawns, 1);
         }
 
         // Update missiles (homing with burnout + pipe collision)
@@ -726,13 +1092,15 @@ const StraitOfChaos = () => {
                     // Barrel roll: dodge missile
                     createParticles(m.x, m.y, '#00FFFF', 12);
                     missilesDodgedRef.current++;
+                    directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.1);
                     missilesRef.current.splice(i, 1); continue;
                 } else if (bird.shieldActive) {
                     // Shield BREAKS through missiles without being consumed!
                     createParticles(m.x, m.y, '#FF4444', 15);
                     createParticles(m.x, m.y, '#FFFFFF', 8);
+                    directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.1);
                     missilesRef.current.splice(i, 1); continue;
-                } else { gameOver(); return; }
+                } else { gameOver('MISSILE_HIT'); return; }
             }
 
             // Missile crashes into pipes! (gives player a way to trick missiles)
@@ -748,18 +1116,20 @@ const StraitOfChaos = () => {
                 createParticles(m.x, m.y, '#FF6600', 20);
                 createParticles(m.x, m.y, '#FFAA00', 10);
                 missilesDodgedRef.current++;
+                directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.08);
                 missilesRef.current.splice(i, 1); continue;
             }
 
             if (m.life <= 0 || m.x < -50 || m.x > CONFIG.INTERNAL_WIDTH + 50 || m.y < -50 || m.y > CONFIG.INTERNAL_HEIGHT + 50) {
                 createParticles(m.x, m.y, '#FF6600', 8);
                 missilesDodgedRef.current++;
+                directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.05);
                 missilesRef.current.splice(i, 1);
             }
         }
 
         // Spawn pirates (after score 7, every ~400 frames)
-        if (scoreRef.current >= profile.pirateStartScore && frameCountRef.current % profile.pirateSpawnEvery === 0) {
+        if (!tutorial.active && scoreRef.current >= profile.pirateStartScore && frameCountRef.current % profile.pirateSpawnEvery === 0) {
             piratesRef.current.push({
                 x: CONFIG.INTERNAL_WIDTH + 40,
                 y: gameRandomRange(80, CONFIG.INTERNAL_HEIGHT - 80),
@@ -768,6 +1138,8 @@ const StraitOfChaos = () => {
                 width: 50, height: 30,
             });
             piratesRef.current[piratesRef.current.length - 1].baseY = piratesRef.current[piratesRef.current.length - 1].y;
+            directorRef.current.pressure += 0.14;
+            if (piratesRef.current.length >= 2) directorRef.current.reliefSpawns = Math.max(directorRef.current.reliefSpawns, 1);
         }
 
         // Update pirates
@@ -780,13 +1152,15 @@ const StraitOfChaos = () => {
             if (Math.abs(dx) < p.width / 2 + bird.radius && Math.abs(dy) < p.height / 2 + bird.radius) {
                 if (isInvincible) {
                     createParticles(p.x, p.y, '#00FFFF', 10);
+                    directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.08);
                     piratesRef.current.splice(i, 1); continue;
                 } else if (bird.shieldActive) {
                     // Shield BREAKS through pirates without being consumed!
                     createParticles(p.x, p.y, '#8B4513', 15);
                     createParticles(p.x, p.y, '#FFFFFF', 8);
+                    directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.08);
                     piratesRef.current.splice(i, 1); continue;
-                } else { gameOver(); return; }
+                } else { gameOver('PIRATE_COLLISION'); return; }
             }
             if (p.x < -60) piratesRef.current.splice(i, 1);
         }
@@ -799,7 +1173,17 @@ const StraitOfChaos = () => {
         // EMP blast timer
         if (empRef.current.blastTimer > 0) empRef.current.blastTimer--;
         if (milestoneToastRef.current.timer > 0) milestoneToastRef.current.timer--;
-    }, [applyMilestoneUpgrades, gameOver]);
+        // Dynamic BGM intensity by score phase
+        if (bgmRef.current) {
+            const phaseTier = scoreRef.current >= 25 ? 3 : scoreRef.current >= 15 ? 2 : scoreRef.current >= 6 ? 1 : 0;
+            const volumeTargets = accessibilityPrefs.reducedMotion ? [0.2, 0.24, 0.28, 0.32] : [0.22, 0.28, 0.34, 0.4];
+            const rateTargets = accessibilityPrefs.reducedMotion ? [1, 1.01, 1.02, 1.03] : [1, 1.03, 1.07, 1.11];
+            const targetVol = volumeTargets[phaseTier];
+            const targetRate = rateTargets[phaseTier];
+            bgmRef.current.volume += (targetVol - bgmRef.current.volume) * 0.06;
+            bgmRef.current.playbackRate += (targetRate - bgmRef.current.playbackRate) * 0.06;
+        }
+    }, [applyMilestoneUpgrades, completeTutorial, gameOver]);
 
     // --- DRAW ---
     const draw = useCallback(() => {
@@ -808,6 +1192,8 @@ const StraitOfChaos = () => {
         const W = CONFIG.INTERNAL_WIDTH, H = CONFIG.INTERNAL_HEIGHT;
         const phase = getEscalationPhase(scoreRef.current);
         const f = factionRef.current || FACTIONS.USA;
+        const accessibilityPrefs = accessibilityRef.current;
+        const dangerColor = accessibilityPrefs.highContrast ? '#FFFFFF' : '#EF4444';
 
         // Background
         if (bgImageRef.current) {
@@ -846,16 +1232,16 @@ const StraitOfChaos = () => {
                 ctx.save(); ctx.translate(pipe.x, 0);
                 ctx.fillStyle = pat; ctx.fillRect(0, 0, pipe.width, pipe.topHeight);
                 ctx.fillStyle = '#111'; ctx.fillRect(0, pipe.topHeight - 8, pipe.width, 8);
-                ctx.strokeStyle = '#EF4444'; ctx.lineWidth = 2;
+                ctx.strokeStyle = dangerColor; ctx.lineWidth = accessibilityPrefs.highContrast ? 2.5 : 2;
                 ctx.strokeRect(0, 0, pipe.width, pipe.topHeight); ctx.restore();
                 ctx.save(); ctx.translate(pipe.x, pipe.bottomY);
                 ctx.fillStyle = pat; ctx.fillRect(0, 0, pipe.width, H - pipe.bottomY);
                 ctx.fillStyle = '#111'; ctx.fillRect(0, 0, pipe.width, 8);
-                ctx.strokeStyle = '#EF4444'; ctx.lineWidth = 2;
+                ctx.strokeStyle = dangerColor; ctx.lineWidth = accessibilityPrefs.highContrast ? 2.5 : 2;
                 ctx.strokeRect(0, 0, pipe.width, H - pipe.bottomY); ctx.restore();
             } else {
-                ctx.shadowBlur = 10; ctx.shadowColor = '#EF4444';
-                ctx.strokeStyle = '#EF4444'; ctx.lineWidth = 3; ctx.fillStyle = '#1A1A1A';
+                ctx.shadowBlur = accessibilityPrefs.reducedMotion ? 0 : 10; ctx.shadowColor = dangerColor;
+                ctx.strokeStyle = dangerColor; ctx.lineWidth = accessibilityPrefs.highContrast ? 4 : 3; ctx.fillStyle = '#1A1A1A';
                 ctx.fillRect(pipe.x, 0, pipe.width, pipe.topHeight);
                 ctx.strokeRect(pipe.x, 0, pipe.width, pipe.topHeight);
                 ctx.fillRect(pipe.x, pipe.bottomY, pipe.width, H - pipe.bottomY);
@@ -892,7 +1278,7 @@ const StraitOfChaos = () => {
         const droneScale = bird.radius / 10;
         ctx.save(); ctx.translate(bird.x, bird.y);
         // Tilt based on velocity
-        const tilt = Math.max(-0.3, Math.min(0.3, bird.velocity * 0.05));
+        const tilt = accessibilityPrefs.reducedMotion ? 0 : Math.max(-0.3, Math.min(0.3, bird.velocity * 0.05));
         ctx.rotate(tilt);
         // Barrel roll spin
         const brDraw = barrelRollRef.current;
@@ -1035,11 +1421,12 @@ const StraitOfChaos = () => {
         missilesRef.current.forEach(m => {
             // Warning phase — blinking ⚠️ indicator
             if (m.warning > 0) {
-                if (Math.floor(m.warning / 6) % 2 === 0) {
+                const shouldDrawWarning = accessibilityPrefs.reducedMotion ? true : Math.floor(m.warning / 6) % 2 === 0;
+                if (shouldDrawWarning) {
                     ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
                     ctx.fillStyle = '#FF0000';
                     ctx.fillText('⚠️', m.x, m.y);
-                    ctx.shadowBlur = 20; ctx.shadowColor = '#FF0000';
+                    ctx.shadowBlur = accessibilityPrefs.reducedMotion ? 0 : 20; ctx.shadowColor = '#FF0000';
                     ctx.strokeStyle = 'rgba(255,0,0,0.5)'; ctx.lineWidth = 1;
                     ctx.beginPath(); ctx.arc(m.x, m.y, 20, 0, Math.PI * 2); ctx.stroke();
                     ctx.shadowBlur = 0;
@@ -1066,7 +1453,8 @@ const StraitOfChaos = () => {
             ctx.fillRect(-8, -5, 3, 2); ctx.fillRect(-8, 3, 3, 2);
             // Flame (bigger when tracking)
             ctx.fillStyle = isTracking ? '#FF8800' : '#FF6600';
-            const flameLen = isTracking ? -12 - Math.random() * 4 : -8 - Math.random() * 2;
+            const flameNoise = Math.sin(frameCountRef.current * 0.21 + m.x * 0.03 + m.y * 0.02);
+            const flameLen = isTracking ? -12 - ((flameNoise + 1) * 0.5) * 4 : -8 - ((flameNoise + 1) * 0.5) * 2;
             ctx.beginPath(); ctx.moveTo(-6, -2); ctx.lineTo(flameLen, 0); ctx.lineTo(-6, 2); ctx.fill();
             ctx.restore();
             // Ring indicator — red = homing, fading orange = burnout
@@ -1097,7 +1485,7 @@ const StraitOfChaos = () => {
             ctx.fillStyle = '#FFF'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
             ctx.fillText('☠', 0, -11);
             // Cannon flash (random)
-            if (Math.random() < 0.02) {
+            if (!accessibilityPrefs.reducedMotion && Math.sin(frameCountRef.current * 0.13 + p.x * 0.08) > 0.98) {
                 ctx.fillStyle = '#FF4400';
                 ctx.beginPath(); ctx.arc(22, 2, 4, 0, Math.PI * 2); ctx.fill();
             }
@@ -1139,12 +1527,15 @@ const StraitOfChaos = () => {
             const intensity = Math.min(1, streakRef.current / 20);
             const bird = birdRef.current;
             // Fire particles behind drone
-            for (let j = 0; j < Math.floor(intensity * 4); j++) {
-                ctx.globalAlpha = 0.4 + Math.random() * 0.4;
-                ctx.fillStyle = ['#FF4400', '#FF8800', '#FFCC00'][Math.floor(Math.random() * 3)];
-                ctx.beginPath();
-                ctx.arc(bird.x - 15 - Math.random() * 20, bird.y + (Math.random() - 0.5) * 12, 2 + Math.random() * 3, 0, Math.PI * 2);
-                ctx.fill();
+            if (!accessibilityPrefs.reducedMotion) {
+                for (let j = 0; j < Math.floor(intensity * 4); j++) {
+                    const pulse = (Math.sin(frameCountRef.current * 0.2 + j * 1.7) + 1) * 0.5;
+                    ctx.globalAlpha = 0.4 + pulse * 0.4;
+                    ctx.fillStyle = ['#FF4400', '#FF8800', '#FFCC00'][j % 3];
+                    ctx.beginPath();
+                    ctx.arc(bird.x - 18 - (j * 6), bird.y + Math.sin(frameCountRef.current * 0.15 + j) * 6, 2 + pulse * 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
             ctx.globalAlpha = 1;
             // Streak counter under score
@@ -1158,7 +1549,7 @@ const StraitOfChaos = () => {
         if (comboTextRef.current.timer > 0) {
             const ct = comboTextRef.current;
             const a = Math.min(1, ct.timer / 15);
-            const scale = 1 + (1 - ct.timer / 60) * 0.3;
+            const scale = accessibilityPrefs.reducedMotion ? 1 : 1 + (1 - ct.timer / 60) * 0.3;
             ctx.globalAlpha = a;
             ctx.font = `bold ${Math.floor(16 * scale)}px "Orbitron", monospace`;
             ctx.fillStyle = '#FFD700'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1174,8 +1565,9 @@ const StraitOfChaos = () => {
             ctx.globalAlpha = a;
             ctx.font = 'bold 12px "Inter", sans-serif';
             ctx.fillStyle = '#FFD700'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.shadowBlur = 8; ctx.shadowColor = '#FFD700';
-            ctx.fillText('💀 CLOSE CALL!', nm.x, nm.y - (40 - nm.timer));
+            ctx.shadowBlur = accessibilityPrefs.reducedMotion ? 0 : 8; ctx.shadowColor = '#FFD700';
+            const yOffset = accessibilityPrefs.reducedMotion ? 20 : (40 - nm.timer);
+            ctx.fillText('💀 CLOSE CALL!', nm.x, nm.y - yOffset);
             ctx.shadowBlur = 0; ctx.globalAlpha = 1;
         }
 
@@ -1251,10 +1643,23 @@ const StraitOfChaos = () => {
     // Input
     useEffect(() => {
         const handleKey = (e) => {
+            if ((e.code === 'Escape' || e.code === 'KeyP')) {
+                if (gameStateRef.current === 'PLAYING') {
+                    e.preventDefault();
+                    pauseGame();
+                    return;
+                }
+                if (gameStateRef.current === 'PAUSED') {
+                    e.preventDefault();
+                    resumeGame();
+                    return;
+                }
+            }
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (gameStateRef.current === 'START' && factionRef.current) startGame();
                 else if (gameStateRef.current === 'PLAYING') flap();
+                else if (gameStateRef.current === 'PAUSED') resumeGame();
             }
             if (e.code === 'KeyS' && gameStateRef.current === 'PLAYING') {
                 e.preventDefault();
@@ -1267,7 +1672,7 @@ const StraitOfChaos = () => {
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [startGame, flap, triggerBarrelRoll, triggerEMP]);
+    }, [pauseGame, resumeGame, startGame, flap, triggerBarrelRoll, triggerEMP]);
 
     const handleCanvasInteraction = (e) => {
         e.preventDefault();
@@ -1302,11 +1707,26 @@ const StraitOfChaos = () => {
         const normalized = parseDifficulty(levelKey) || DEFAULT_DIFFICULTY;
         setSelectedDifficulty(normalized);
     };
+    const selectRunMode = (mode) => {
+        if (isModeLocked) return;
+        if (mode !== 'CLASSIC' && mode !== 'DAILY') return;
+        setRunMode(mode);
+    };
+    const selectModifier = (modifierKey) => {
+        if (!RUN_MODIFIERS[modifierKey]) return;
+        setSelectedModifier(modifierKey);
+    };
+    const toggleAccessibility = (key) => {
+        if (!['reducedMotion', 'largeUI', 'highContrast'].includes(key)) return;
+        setAccessibility(prev => ({ ...prev, [key]: !prev[key] }));
+    };
 
     const getShareUrl = () => {
         const base = window.location.origin + window.location.pathname;
         const levelKey = difficultyRef.current.level || selectedDifficultyRef.current;
-        return `${base}?seed=${currentSeedRef.current}&score=${scoreRef.current}&difficulty=${levelKey.toLowerCase()}`;
+        const mode = runMetaRef.current.mode || runModeRef.current;
+        const modifier = runMetaRef.current.modifier || selectedModifierRef.current;
+        return `${base}?seed=${currentSeedRef.current}&score=${scoreRef.current}&difficulty=${levelKey.toLowerCase()}&mode=${mode.toLowerCase()}&modifier=${modifier.toLowerCase()}`;
     };
 
     const copyShareLink = async () => {
@@ -1321,15 +1741,39 @@ const StraitOfChaos = () => {
     const f = faction ? FACTIONS[faction] : null;
     const difficultyProfile = getDifficultyProfile(selectedDifficulty);
     const highScore = getDifficultyHighScore(highScores, selectedDifficulty);
+    const dailyMission = getDailyMission(selectedDifficulty);
+    const dailyScoreKey = getDailyScoreKey(dailyMission.dateKey, selectedDifficulty);
+    const dailyBestScore = Number.isFinite(dailyScores?.[dailyScoreKey]) ? dailyScores[dailyScoreKey] : 0;
+    const dailyMedal = getMedalForScore(dailyBestScore, dailyMission.medals);
+    const runModifierMeta = RUN_MODIFIERS[selectedModifier] || RUN_MODIFIERS.NONE;
+    const runLevelKey = runMetaRef.current.level || selectedDifficulty;
+    const runDailyTargets = DAILY_MEDAL_TARGETS[runLevelKey] || DAILY_MEDAL_TARGETS[DEFAULT_DIFFICULTY];
+    const runDailyScoreKey = getDailyScoreKey(runMetaRef.current.dailyDateKey, runLevelKey);
+    const storedRunDailyBest = Number.isFinite(dailyScores?.[runDailyScoreKey]) ? dailyScores[runDailyScoreKey] : 0;
+    const runDailyBestScore = runMetaRef.current.mode === 'DAILY' ? Math.max(storedRunDailyBest, score) : storedRunDailyBest;
+    const runDailyMedal = getMedalForScore(score, runDailyTargets);
     const scoreTier = Math.min(MILESTONE_UPGRADES.length, Math.floor(score / 10));
     const nextMilestoneDelta = scoreTier >= MILESTONE_UPGRADES.length ? 0 : (10 - (score % 10));
     const phase = getEscalationPhase(score);
 
     return (
-        <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden', position: 'relative', touchAction: 'none', userSelect: 'none' }}>
+        <div
+            className={`soc-root${accessibility.largeUI ? ' soc-large-ui' : ''}${accessibility.highContrast ? ' soc-high-contrast' : ''}${accessibility.reducedMotion ? ' soc-reduced-motion' : ''}`}
+            style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden', position: 'relative', touchAction: 'none', userSelect: 'none' }}
+        >
             <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@400;600&family=Black+Ops+One&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        .soc-root.soc-large-ui .soc-screen { width: clamp(360px, 90vw, 520px); }
+        .soc-root.soc-large-ui .soc-tab-btn { font-size: 12px; padding: 12px; }
+        .soc-root.soc-large-ui .soc-btn { font-size: 15px; min-height: 54px; }
+        .soc-root.soc-large-ui .soc-score { font-size: clamp(30px,7vw,54px); }
+        .soc-root.soc-high-contrast .soc-screen { border-color: #fff; background: rgba(0,0,0,0.96); }
+        .soc-root.soc-high-contrast .soc-tab-btn.active { color: #fff; border-bottom-color: #fff; }
+        .soc-root.soc-high-contrast .soc-btn-play { background: #fff; color: #000; box-shadow: 0 0 0 2px #fff; }
+        .soc-root.soc-high-contrast .soc-label, .soc-root.soc-high-contrast .soc-tagline, .soc-root.soc-high-contrast p { color: #E5E7EB; }
+        .soc-root.soc-reduced-motion .soc-screen::after, .soc-root.soc-reduced-motion .soc-crt { display: none; }
+        .soc-root.soc-reduced-motion .soc-btn, .soc-root.soc-reduced-motion .soc-tab-btn { transition: none; animation: none; }
         .soc-wrap { position: relative; width: ${canvasSize.width}px; height: ${canvasSize.height}px; border: 2px solid rgba(239,68,68,0.4); box-shadow: 0 0 30px rgba(239,68,68,0.2), inset 0 0 30px rgba(0,0,0,0.5); border-radius: 12px; overflow: hidden; }
         .soc-wrap canvas { display: block; width: 100%; height: 100%; touch-action: manipulation; }
         .soc-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
@@ -1376,6 +1820,28 @@ const StraitOfChaos = () => {
         .soc-difficulty.active { border-color: #F59E0B; background: rgba(245,158,11,0.08); color: #F59E0B; }
         .soc-difficulty-name { display: block; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; margin-bottom: 4px; }
         .soc-difficulty-meta { display: block; font-family: 'Inter', sans-serif; font-size: 9px; opacity: 0.7; line-height: 1.2; }
+        .soc-lock-note { color: #F59E0B; font-size: 10px; margin-top: 4px; }
+
+        .soc-mode-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 10px 0; }
+        .soc-mode { border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #cbd5e1; padding: 10px; text-align: center; cursor: pointer; transition: all 0.2s; }
+        .soc-mode.active { border-color: #22D3EE; background: rgba(34,211,238,0.08); color: #67E8F9; }
+        .soc-mode:disabled { opacity: 0.55; cursor: not-allowed; }
+        .soc-mode-title { display: block; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; margin-bottom: 2px; }
+        .soc-mode-desc { display: block; font-family: 'Inter', sans-serif; font-size: 9px; opacity: 0.75; }
+
+        .soc-modifier-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 10px 0; }
+        .soc-modifier { border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.02); color: #cbd5e1; padding: 9px; text-align: left; cursor: pointer; transition: all 0.2s; }
+        .soc-modifier.active { border-color: #A78BFA; background: rgba(167,139,250,0.1); color: #DDD6FE; }
+        .soc-modifier-title { display: block; font-family: 'Orbitron', sans-serif; font-size: 10px; font-weight: 700; margin-bottom: 2px; }
+        .soc-modifier-desc { display: block; font-family: 'Inter', sans-serif; font-size: 9px; opacity: 0.75; line-height: 1.25; }
+        .soc-a11y-row { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 10px 0 0; }
+        .soc-a11y-toggle { border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.02); color: #CBD5E1; padding: 8px 10px; text-align: left; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; font-family: 'Inter', sans-serif; font-size: 11px; }
+        .soc-a11y-toggle.active { border-color: #22C55E; background: rgba(34,197,94,0.12); color: #BBF7D0; }
+        .soc-a11y-pill { font-family: 'Orbitron', sans-serif; font-size: 9px; letter-spacing: 0.8px; text-transform: uppercase; }
+
+        .soc-daily-panel { border: 1px solid rgba(34,211,238,0.35); background: rgba(34,211,238,0.07); border-radius: 10px; padding: 10px; margin: 10px 0; text-align: left; }
+        .soc-daily-title { font-family: 'Orbitron', sans-serif; font-size: 11px; color: #67E8F9; margin-bottom: 4px; }
+        .soc-badge { display: inline-flex; align-items: center; border: 1px solid rgba(245,158,11,0.5); color: #FBBF24; background: rgba(245,158,11,0.1); border-radius: 999px; padding: 2px 8px; font-size: 10px; font-family: 'Orbitron', sans-serif; margin-left: 6px; }
 
         .soc-intel-item { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; text-align: left; background: rgba(255,255,255,0.02); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
         .soc-intel-icon { font-size: 20px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border-radius: 6px; flex-shrink: 0; }
@@ -1405,9 +1871,13 @@ const StraitOfChaos = () => {
         @media (max-width: 480px) { .soc-wrap { border: none; border-radius: 0; } }
         .soc-sound-btn { position: absolute; top: 10px; left: 10px; z-index: 20; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #fff; transition: background 0.2s; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
         .soc-sound-btn:hover { background: rgba(255,255,255,0.15); }
+        .soc-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
         .soc-stat { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px 4px; text-align: center; }
         .soc-stat-val { font-family: 'Orbitron', monospace; font-weight: 700; font-size: 18px; color: #fff; }
         .soc-stat-lbl { font-family: 'Inter', sans-serif; font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+        .soc-death-card { border: 1px solid rgba(239,68,68,0.45); background: rgba(239,68,68,0.08); border-radius: 10px; padding: 10px; margin: 10px 0; text-align: left; }
+        .soc-death-title { font-family: 'Orbitron', sans-serif; font-size: 11px; color: #FCA5A5; margin-bottom: 3px; }
+        .soc-death-tip { font-family: 'Inter', sans-serif; font-size: 11px; color: #CBD5E1; line-height: 1.35; margin: 0; }
         
         /* CRT Scanline Overlay */
         .soc-crt { position: absolute; inset: 0; pointer-events: none; z-index: 5; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02)); background-size: 100% 3px, 3px 100%; opacity: 0.5; }
@@ -1417,7 +1887,7 @@ const StraitOfChaos = () => {
       `}</style>
 
             <div className="soc-wrap">
-                <div className="soc-crt" />
+                {!accessibility.reducedMotion && !accessibility.highContrast && <div className="soc-crt" />}
                 <canvas ref={canvasRef} width={CONFIG.INTERNAL_WIDTH} height={CONFIG.INTERNAL_HEIGHT}
                     onClick={handleCanvasInteraction} onTouchStart={handleCanvasInteraction} onTouchEnd={handleTouchEnd} />
 
@@ -1425,6 +1895,11 @@ const StraitOfChaos = () => {
                 <div className="soc-sound-btn" onClick={(e) => { e.stopPropagation(); setSoundEnabled(v => !v); }}>
                     {soundEnabled ? '🔊' : '🔇'}
                 </div>
+                {gameState === 'PLAYING' && (
+                    <div className="soc-sound-btn" style={{ left: '56px' }} onClick={(e) => { e.stopPropagation(); pauseGame(); }}>
+                        ⏸
+                    </div>
+                )}
 
                 {gameState === 'PLAYING' && <div className="soc-score">{score}</div>}
                 {gameState === 'PLAYING' && (
@@ -1432,6 +1907,36 @@ const StraitOfChaos = () => {
                         <div className="soc-run-level">{difficultyProfile.label} Level</div>
                         <div className="soc-run-upgrade">
                             {scoreTier >= MILESTONE_UPGRADES.length ? 'All upgrades unlocked' : `Next upgrade in ${nextMilestoneDelta} towers`}
+                        </div>
+                        <div className="soc-run-upgrade">
+                            {runMetaRef.current.mode === 'DAILY' ? `Daily ${runMetaRef.current.dailyDateKey}` : 'Classic'} • {RUN_MODIFIERS[runMetaRef.current.modifier]?.label || 'Standard'}
+                        </div>
+                    </div>
+                )}
+                {gameState === 'PLAYING' && tutorialUi.active && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '56px',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        zIndex: 30,
+                        background: 'rgba(0,0,0,0.78)',
+                        border: '1px solid rgba(34,211,238,0.65)',
+                        borderRadius: '10px',
+                        padding: '8px 12px',
+                        minWidth: '250px',
+                        textAlign: 'center',
+                        pointerEvents: 'none',
+                    }}>
+                        <div style={{ fontFamily: 'Orbitron, monospace', fontSize: '11px', color: '#67E8F9' }}>
+                            TUTORIAL {tutorialUi.stepIndex + 1}/3 • {Math.ceil(tutorialUi.remainingFrames / 60)}s
+                        </div>
+                        <div style={{ fontFamily: 'Inter, sans-serif', fontSize: '11px', color: '#E5E7EB', marginTop: '2px' }}>
+                            {TUTORIAL_STEPS[tutorialUi.stepIndex]?.title}
+                        </div>
+                        <div style={{ fontFamily: 'Inter, sans-serif', fontSize: '10px', color: '#94A3B8', marginTop: '2px' }}>
+                            {TUTORIAL_STEPS[tutorialUi.stepIndex]?.detail}
+                            {tutorialUi.stepIndex === 0 ? ` (${tutorialUi.flapCount}/3)` : ''}
                         </div>
                     </div>
                 )}
@@ -1484,6 +1989,7 @@ const StraitOfChaos = () => {
                                                 <p style={{ margin: 0, fontWeight: 700, color: '#EF4444' }}>DIPLOMATIC CHALLENGE</p>
                                                 <div style={{ fontSize: '28px', fontFamily: 'Orbitron', color: '#fff', margin: '4px 0' }}>{challengeScore.current}</div>
                                                 <p style={{ fontSize: '10px', margin: 0, opacity: 0.8 }}>Score to beat from the opposing faction</p>
+                                                {challengeDifficulty.current && <p style={{ marginTop: '6px', fontSize: '10px' }}>Difficulty lock: <span className="hl">{getDifficultyProfile(challengeDifficulty.current).label}</span></p>}
                                             </div>
                                         )}
 
@@ -1515,6 +2021,83 @@ const StraitOfChaos = () => {
                                             ))}
                                         </div>
                                         {isDifficultyLocked && <p className="soc-lock-note" style={{ color: '#F59E0B', fontSize: '10px', marginTop: '4px' }}>⚠️ Difficulty locked for challenge fairness.</p>}
+
+                                        <div className="soc-section-title">Run Mode</div>
+                                        <div className="soc-mode-row">
+                                            <button
+                                                type="button"
+                                                className={`soc-mode ${runMode === 'CLASSIC' ? 'active' : ''}`}
+                                                disabled={isModeLocked}
+                                                onClick={() => selectRunMode('CLASSIC')}
+                                            >
+                                                <span className="soc-mode-title">Classic</span>
+                                                <span className="soc-mode-desc">Randomized sandbox</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={`soc-mode ${runMode === 'DAILY' ? 'active' : ''}`}
+                                                disabled={isModeLocked}
+                                                onClick={() => selectRunMode('DAILY')}
+                                            >
+                                                <span className="soc-mode-title">Daily Mission</span>
+                                                <span className="soc-mode-desc">Fixed seed for the day</span>
+                                            </button>
+                                        </div>
+
+                                        {runMode === 'DAILY' && !isModeLocked && (
+                                            <div className="soc-daily-panel">
+                                                <div className="soc-daily-title">
+                                                    Daily Seed: {dailyMission.dateKey}
+                                                    <span className="soc-badge">{dailyMedal}</span>
+                                                </div>
+                                                <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1' }}>
+                                                    Best today: <strong>{dailyBestScore}</strong> | Targets: B {dailyMission.medals.bronze} / S {dailyMission.medals.silver} / G {dailyMission.medals.gold}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        <div className="soc-section-title">Loadout Modifier</div>
+                                        <div className="soc-modifier-row">
+                                            {Object.entries(RUN_MODIFIERS).map(([key, meta]) => (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    className={`soc-modifier ${selectedModifier === key ? 'active' : ''}`}
+                                                    onClick={() => selectModifier(key)}
+                                                >
+                                                    <span className="soc-modifier-title">{meta.label}</span>
+                                                    <span className="soc-modifier-desc">{meta.desc}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className="soc-section-title">Accessibility</div>
+                                        <div className="soc-a11y-row">
+                                            <button
+                                                type="button"
+                                                className={`soc-a11y-toggle ${accessibility.reducedMotion ? 'active' : ''}`}
+                                                onClick={() => toggleAccessibility('reducedMotion')}
+                                            >
+                                                <span>Reduced Motion & Flash</span>
+                                                <span className="soc-a11y-pill">{accessibility.reducedMotion ? 'On' : 'Off'}</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={`soc-a11y-toggle ${accessibility.largeUI ? 'active' : ''}`}
+                                                onClick={() => toggleAccessibility('largeUI')}
+                                            >
+                                                <span>Larger Interface</span>
+                                                <span className="soc-a11y-pill">{accessibility.largeUI ? 'On' : 'Off'}</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={`soc-a11y-toggle ${accessibility.highContrast ? 'active' : ''}`}
+                                                onClick={() => toggleAccessibility('highContrast')}
+                                            >
+                                                <span>High Contrast Mode</span>
+                                                <span className="soc-a11y-pill">{accessibility.highContrast ? 'On' : 'Off'}</span>
+                                            </button>
+                                        </div>
                                     </>
                                 ) : (
                                     <>
@@ -1560,9 +2143,42 @@ const StraitOfChaos = () => {
 
                             <div className="soc-footer">
                                 <button className="soc-btn soc-btn-play" onClick={startGame} style={{ opacity: faction ? 1 : 0.4, pointerEvents: faction ? 'auto' : 'none' }}>
-                                    {isChallenge ? 'Accept Challenge' : 'Begin Deployment'}
+                                    {isChallenge ? 'Accept Challenge' : runMode === 'DAILY' ? 'Start Daily Mission' : 'Begin Deployment'}
                                 </button>
-                                <p className="soc-tagline">Authorized personnel only beyond this point.</p>
+                                {needsTutorial && !isChallenge && (
+                                    <p className="soc-tagline" style={{ color: '#67E8F9', marginTop: '6px' }}>
+                                        First deployment includes a 20-second guided tutorial.
+                                    </p>
+                                )}
+                                <p className="soc-tagline">Loadout: {runModifierMeta.label} • Authorized personnel only beyond this point.</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {gameState === 'PAUSED' && (
+                    <div className="soc-overlay">
+                        <div className="soc-screen" style={{ width: 'clamp(280px, 70vw, 420px)' }}>
+                            <div className="soc-header" style={{ padding: '18px 20px' }}>
+                                <h1 style={{ fontSize: 'clamp(20px,5vw,28px)' }}>Paused</h1>
+                            </div>
+                            <div className="soc-body">
+                                <p style={{ marginBottom: '10px' }}>Mission is on hold.</p>
+                                {!confirmRestart ? (
+                                    <div className="soc-btn-row" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+                                        <button className="soc-btn soc-btn-play" onClick={resumeGame}>Resume Mission</button>
+                                        <button className="soc-btn soc-btn-sec" onClick={requestRestart}>Restart Run</button>
+                                        <button className="soc-btn soc-btn-sec" onClick={quitToBriefing}>Back to Briefing</button>
+                                    </div>
+                                ) : (
+                                    <div style={{ border: '1px solid rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.08)', borderRadius: '10px', padding: '12px' }}>
+                                        <p style={{ marginBottom: '10px', color: '#FCA5A5' }}>Restart current run? Progress will be lost.</p>
+                                        <div className="soc-btn-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                            <button className="soc-btn soc-btn-play" onClick={confirmRestartRun}>Yes, Restart</button>
+                                            <button className="soc-btn soc-btn-sec" onClick={cancelRestart}>Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -1580,11 +2196,17 @@ const StraitOfChaos = () => {
                             <div className="soc-body">
                                 <div className="soc-label" style={{ marginBottom: '4px' }}>Obstacles Cleared</div>
                                 <div className="soc-score-big" style={{ fontSize: '64px', textShadow: `0 0 20px ${phase.glow}` }}>{score}</div>
+                                {deathReport.label && (
+                                    <div className="soc-death-card">
+                                        <div className="soc-death-title">Failure Cause: {deathReport.label}</div>
+                                        <p className="soc-death-tip">{deathReport.tip}</p>
+                                    </div>
+                                )}
 
                                 <div className="soc-stats-grid">
                                     <div className="soc-stat">
                                         <div className="soc-stat-val" style={{ color: '#F59E0B' }}>{highScore}</div>
-                                        <div className="soc-stat-lbl">Record</div>
+                                        <div className="soc-stat-lbl">{difficultyProfile.label} Record</div>
                                     </div>
                                     <div className="soc-stat">
                                         <div className="soc-stat-val" style={{ color: '#3B82F6' }}>{scoreTier}</div>
@@ -1600,6 +2222,17 @@ const StraitOfChaos = () => {
                                     <div className={`soc-result ${score >= challengeScore.current ? 'win' : 'lose'}`} style={{ margin: '16px 0', padding: '12px' }}>
                                         <div className="soc-label" style={{ color: 'inherit', marginBottom: '4px' }}>Vs Rival Nation</div>
                                         <div style={{ fontSize: '20px', fontWeight: 900 }}>{score >= challengeScore.current ? 'MISSION ACCOMPLISHED 🏆' : 'STRATEGIC FAILURE 💀'}</div>
+                                    </div>
+                                )}
+
+                                {runMetaRef.current.mode === 'DAILY' && (
+                                    <div className="soc-daily-panel">
+                                        <div className="soc-daily-title">
+                                            Daily Result ({runMetaRef.current.dailyDateKey}) <span className="soc-badge">{runDailyMedal}</span>
+                                        </div>
+                                        <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1' }}>
+                                            Daily best: <strong>{runDailyBestScore}</strong> | Targets: B {runDailyTargets.bronze} / S {runDailyTargets.silver} / G {runDailyTargets.gold}
+                                        </p>
                                     </div>
                                 )}
 

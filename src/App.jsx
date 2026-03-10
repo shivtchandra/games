@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import StraitOfChaos from './StraitOfChaos';
 import AdminPanel from './AnalyticsDashboard';
 import { trackPageVisit } from './analytics';
@@ -17,10 +18,10 @@ function App() {
     }, []);
 
     if (route === '#admin') {
-        return <AdminPanel />;
+        return <><AdminPanel /><Analytics /></>;
     }
 
-    return <StraitOfChaos />;
+    return <><StraitOfChaos /><Analytics /></>;
 }
 
 export default App;
