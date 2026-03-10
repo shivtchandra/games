@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import StraitOfChaos from './StraitOfChaos';
 import AdminPanel from './AnalyticsDashboard';
 import { trackPageVisit } from './analytics';
+import { Analytics } from '@vercel/analytics/react';
 
 function App() {
     const [route, setRoute] = useState(window.location.hash);
@@ -17,10 +18,20 @@ function App() {
     }, []);
 
     if (route === '#admin') {
-        return <AdminPanel />;
+        return (
+            <>
+                <AdminPanel />
+                <Analytics />
+            </>
+        );
     }
 
-    return <StraitOfChaos />;
+    return (
+        <>
+            <StraitOfChaos />
+            <Analytics />
+        </>
+    );
 }
 
 export default App;
