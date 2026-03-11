@@ -126,15 +126,15 @@ const DIFFICULTY_LEVELS = {
 };
 
 const MILESTONE_UPGRADES = [
-    { score: 10, name: 'Mk-II Thrusters', effect: 'Barrel roll cooldown reduced to 3s', headline: 'Drone upgraded at 10 towers: Mk-II Thrusters online' },
-    { score: 20, name: 'EMP Capacitor', effect: 'EMP now charges in 4 clears', headline: '20 towers breached: EMP Capacitor installed' },
-    { score: 30, name: 'Tactical AI Core', effect: 'More power-up drops and longer Peace shield', headline: '30 towers reached: Tactical AI Core activated' },
+    { score: 10, name: 'Mk-II Thrusters', icon: '🛠️', effect: 'Barrel roll cooldown reduced to 3s', headline: 'Drone upgraded at 10 towers: Mk-II Thrusters online' },
+    { score: 20, name: 'EMP Capacitor', icon: '⚡', effect: 'EMP now charges in 4 clears', headline: '20 towers breached: EMP Capacitor installed' },
+    { score: 30, name: 'Tactical AI Core', icon: '🧠', effect: 'More power-up drops and longer Peace shield', headline: '30 towers reached: Tactical AI Core activated' },
 ];
 
 const RUN_MODIFIERS = {
     NONE: { label: 'Standard', desc: 'No modifier' },
     SHIELD_PLUS: { label: 'Shield+', desc: 'Longer Peace shield' },
-    EMP_PLUS: { label: 'EMP+', desc: 'Lower EMP charge requirement' },
+    EMP_SHIELD: { label: 'EMP Shield', desc: 'EMP breaks through walls' },
     SPEED_PLUS: { label: 'Speed+', desc: 'Longer Oil boost' },
 };
 
@@ -182,11 +182,40 @@ const DEATH_REASON_DETAILS = {
     UNKNOWN: { label: 'Mission failure', tip: 'Stabilize first, then push score.' },
 };
 
-const HIGH_SCORE_STORAGE_KEY = 'straitChaosHighScoresByDifficulty';
-const DAILY_SCORE_STORAGE_KEY = 'straitChaosDailyScoresByDifficulty';
-const ACCESSIBILITY_STORAGE_KEY = 'straitChaosAccessibilityPrefs';
+const HIGH_SCORE_STORAGE_KEY = 'soc-high-scores-v1';
+const DAILY_SCORE_STORAGE_KEY = 'soc-daily-scores-v1';
+const ACCESSIBILITY_STORAGE_KEY = 'soc-accessibility-v1';
+const WAR_FUNDS_STORAGE_KEY = 'soc-war-funds-v1';
+const SHOP_UPGRADES_STORAGE_KEY = 'soc-purchased-upgrades-v1';
 const TUTORIAL_STORAGE_KEY = 'straitChaosTutorialSeenV1';
 const DEFAULT_DIFFICULTY = 'MEDIUM';
+
+const SHOP_ITEMS = {
+    ARMOR_PLATING: {
+        id: 'ARMOR_PLATING',
+        label: 'Armor Plating',
+        desc: 'Start every mission with a Peace shield active.',
+        cost: 2000,
+        icon: '🛡️',
+        type: 'PERMANENT',
+    },
+    TACTICAL_CAPACITOR: {
+        id: 'TACTICAL_CAPACITOR',
+        label: 'Tactical Capacitor',
+        desc: 'EMP charge requirement -1 (min 3).',
+        cost: 3000,
+        icon: '⚡',
+        type: 'PERMANENT',
+    },
+    REFINED_FUEL: {
+        id: 'REFINED_FUEL',
+        label: 'Refined Fuel',
+        desc: 'Oil barrels grant +15% boost strength.',
+        cost: 1500,
+        icon: '🛢️',
+        type: 'PERMANENT',
+    },
+};
 const DEFAULT_RUN_MODE = 'CLASSIC';
 const TUTORIAL_TOTAL_FRAMES = 1200; // 20s at 60fps target
 const TUTORIAL_STEPS = [
@@ -250,6 +279,27 @@ function readAccessibilityPrefs() {
     } catch {
         return fallback;
     }
+}
+
+function readWarFunds() {
+    try {
+        return parseInt(localStorage.getItem(WAR_FUNDS_STORAGE_KEY) || '0', 10);
+    } catch { return 0; }
+}
+
+function saveWarFunds(val) {
+    try { localStorage.setItem(WAR_FUNDS_STORAGE_KEY, val.toString()); } catch { /* ignore */ }
+}
+
+function readPurchasedUpgrades() {
+    try {
+        const raw = localStorage.getItem(SHOP_UPGRADES_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+function savePurchasedUpgrades(upgrades) {
+    try { localStorage.setItem(SHOP_UPGRADES_STORAGE_KEY, JSON.stringify(upgrades)); } catch { /* ignore */ }
 }
 
 function getMedalForScore(score, medals) {
@@ -376,6 +426,8 @@ const StraitOfChaos = () => {
     const [confirmRestart, setConfirmRestart] = useState(false);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [activeTab, setActiveTab] = useState('MISSION');
+    const [warFunds, setWarFunds] = useState(readWarFunds);
+    const [purchasedUpgrades, setPurchasedUpgrades] = useState(readPurchasedUpgrades);
     const [soundEnabled, setSoundEnabled] = useState(() => {
         const s = localStorage.getItem('straitChaosSoundOn');
         return s !== null ? s === 'true' : true;
@@ -398,6 +450,7 @@ const StraitOfChaos = () => {
     const accessibilityRef = useRef(accessibility);
     const tutorialRef = useRef({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0, completed: false });
     const visualRandomRef = useRef(createSeededRandom((currentSeedRef.current ^ 0x9e3779b9) >>> 0));
+    const floatingTextsRef = useRef([]); // {x, y, text, life, color}
 
     const birdRef = useRef({
         y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
@@ -558,10 +611,22 @@ const StraitOfChaos = () => {
             speedBoostMultiplier: 1.5,
         };
         if (modifierKey === 'SHIELD_PLUS') baseProgression.shieldBonusFrames += 120;
-        if (modifierKey === 'EMP_PLUS') baseProgression.empMaxCharge = 4;
+        if (modifierKey === 'EMP_SHIELD') {
+            baseProgression.empMaxCharge = 4;
+            baseProgression.empWallBreak = true;
+        }
         if (modifierKey === 'SPEED_PLUS') {
             baseProgression.speedBoostBonusFrames = 90;
             baseProgression.speedBoostMultiplier = 1.7;
+        }
+
+        // Apply Permanent Shop Upgrades
+        const purchased = readPurchasedUpgrades();
+        if (purchased.includes('TACTICAL_CAPACITOR')) {
+            baseProgression.empMaxCharge = Math.max(3, baseProgression.empMaxCharge - 1);
+        }
+        if (purchased.includes('REFINED_FUEL')) {
+            baseProgression.speedBoostMultiplier += 0.15;
         }
         currentSeedRef.current = runSeed;
         runMetaRef.current = {
@@ -576,13 +641,14 @@ const StraitOfChaos = () => {
         birdRef.current = {
             y: CONFIG.INTERNAL_HEIGHT / 2, x: 100,
             velocity: 0, radius: CONFIG.BIRD_SIZE / 2,
-            shieldActive: false, shieldTimer: 0, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
+            shieldActive: purchased.includes('ARMOR_PLATING'), shieldTimer: 0, speedBoostTimer: 0, shrinkTimer: 0, sanctionSlowTimer: 0, propAngle: 0,
         };
         for (const p of particlesRef.current) particlePoolRef.current.push(p);
         for (const r of touchRipplesRef.current) ripplePoolRef.current.push(r);
         pipesRef.current = []; powerupsRef.current = []; particlesRef.current = [];
         touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = [];
         trumpQuoteRef.current = { text: '', timer: 0 };
+        floatingTextsRef.current = [];
         frameCountRef.current = 0;
         difficultyRef.current = difficultyRuntime;
         progressionRef.current = baseProgression;
@@ -706,6 +772,36 @@ const StraitOfChaos = () => {
             missilesDodgedRef.current++;
         });
         missilesRef.current = [];
+
+        // EMP Shield: Destroy nearby pipes
+        if (progressionRef.current.empWallBreak) {
+            const bird = birdRef.current;
+            for (let i = pipesRef.current.length - 1; i >= 0; i--) {
+                const pipe = pipesRef.current[i];
+                const dx = (pipe.x + pipe.width / 2) - bird.x;
+                const dy = (pipe.topHeight + (pipe.bottomY - pipe.topHeight) / 2) - bird.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                // Blast radius covers most of the local vertical space
+                if (dist < 280) {
+                    createParticles(pipe.x + pipe.width / 2, bird.y, '#00FFFF', 20);
+                    createParticles(pipe.x + pipe.width / 2, bird.y, '#FF6600', 12);
+                    if (!pipe.passed) {
+                        pipe.passed = true;
+                        scoreRef.current += 1;
+                        setScore(scoreRef.current);
+                        if (pipe.isSanction) {
+                            const amount = 100;
+                            const funds = readWarFunds() + amount;
+                            saveWarFunds(funds); setWarFunds(funds);
+                            addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
+                        }
+                    }
+                    pipesRef.current.splice(i, 1);
+                }
+            }
+        }
+
         createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 25);
         const t = tutorialRef.current;
         if (t.active && t.stepIndex === 2) {
@@ -804,8 +900,11 @@ const StraitOfChaos = () => {
                 title: `UPGRADE UNLOCKED: ${upgrade.name}`,
                 detail: upgrade.effect,
                 timer: 150,
+                color: tier === 1 ? '#F59E0B' : tier === 2 ? '#00FFFF' : '#A78BFA',
             };
-            activeHeadlinesRef.current.push(`🛠️ ${upgrade.headline}`);
+            activeHeadlinesRef.current.push(`${upgrade.icon} ${upgrade.headline}`);
+            createParticles(birdRef.current.x, birdRef.current.y, '#FFD700', 40);
+            createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 20);
         }
 
         progressionRef.current.tier = targetTier;
@@ -851,9 +950,10 @@ const StraitOfChaos = () => {
 
         // Barrel roll timer
         const br = barrelRollRef.current;
+        const emp = empRef.current;
         if (br.active) { br.timer--; br.angle += Math.PI / 6; if (br.timer <= 0) br.active = false; }
         if (br.cooldown > 0) br.cooldown--;
-        const isInvincible = br.active;
+        const isInvincible = br.active || (progressionRef.current.empWallBreak && emp.blastTimer > 0);
 
         const hitTop = bird.y - bird.radius < 0;
         const hitBottom = bird.y + bird.radius > CONFIG.INTERNAL_HEIGHT;
@@ -967,7 +1067,13 @@ const StraitOfChaos = () => {
                     pipesRef.current.splice(i, 1);
                     directorRef.current.reliefSpawns = Math.max(directorRef.current.reliefSpawns, 1);
                     directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.25);
-                    if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
+                    if (!pipe.passed) {
+                        pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                        const amount = 100;
+                        const funds = readWarFunds() + amount;
+                        saveWarFunds(funds); setWarFunds(funds);
+                        addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
+                    }
                     streakRef.current = Math.max(0, streakRef.current - 1);
                     if (SCORE_HEADLINES[scoreRef.current]) {
                         activeHeadlinesRef.current.push(SCORE_HEADLINES[scoreRef.current]);
@@ -979,7 +1085,15 @@ const StraitOfChaos = () => {
                     createParticles(bird.x, bird.y, '#FFFFFF', 20);
                     createParticles(pipe.x + pipe.width / 2, bird.y, '#FF6600', 12);
                     // Score it as passed
-                    if (!pipe.passed) { pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current); }
+                    if (!pipe.passed) {
+                        pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                        if (pipe.isSanction) {
+                            const amount = 100;
+                            const funds = readWarFunds() + amount;
+                            saveWarFunds(funds); setWarFunds(funds);
+                            addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
+                        }
+                    }
                     continue;
                 } else {
                     gameOver('TOWER_COLLISION'); return;
@@ -988,6 +1102,12 @@ const StraitOfChaos = () => {
 
             if (!pipe.passed && bL > pR) {
                 pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                if (pipe.isSanction) {
+                    const amount = 100;
+                    const funds = readWarFunds() + amount;
+                    saveWarFunds(funds); setWarFunds(funds);
+                    addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
+                }
                 directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.07);
                 // Streak
                 streakRef.current++;
@@ -1267,6 +1387,23 @@ const StraitOfChaos = () => {
             ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
         });
 
+        // Floating texts
+        for (let i = floatingTextsRef.current.length - 1; i >= 0; i--) {
+            const ft = floatingTextsRef.current[i];
+            ft.life--;
+            ft.y -= 0.8;
+            if (ft.life <= 0) {
+                floatingTextsRef.current.splice(i, 1);
+            } else {
+                ctx.globalAlpha = ft.life / 60;
+                ctx.fillStyle = ft.color;
+                ctx.font = 'bold 16px "Orbitron", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(ft.text, ft.x, ft.y);
+                ctx.globalAlpha = 1;
+            }
+        }
+
         // Touch Ripples
         touchRipplesRef.current.forEach(r => {
             ctx.globalAlpha = r.life / 20; ctx.strokeStyle = f.color; ctx.lineWidth = 2;
@@ -1513,7 +1650,6 @@ const StraitOfChaos = () => {
         ctx.fillText(fullText, xPos, H - tickerH / 2);
         ctx.restore();
 
-        // Escalation phase indicator
         ctx.font = 'bold 10px "Orbitron", monospace'; ctx.fillStyle = phase.glow;
         ctx.textAlign = 'right'; ctx.textBaseline = 'top';
         ctx.fillText('◆ ' + phase.name, W - 12, 10);
@@ -1521,6 +1657,37 @@ const StraitOfChaos = () => {
         ctx.font = 'bold 9px "Orbitron", monospace';
         ctx.fillStyle = '#93C5FD';
         ctx.fillText(`LEVEL ${runProfile.label.toUpperCase()} • TIER ${progressionRef.current.tier}`, W - 12, 24);
+
+        // --- ACTIVE SYSTEMS HUD (Top Left) ---
+        const activeSystems = [];
+        const purchased = readPurchasedUpgrades();
+        if (purchased.includes('ARMOR_PLATING')) activeSystems.push({ icon: '🛡️', label: 'ARMOR' });
+        if (purchased.includes('TACTICAL_CAPACITOR')) activeSystems.push({ icon: '⚡', label: 'CAPACITOR' });
+        if (purchased.includes('REFINED_FUEL')) activeSystems.push({ icon: '🛢️', label: 'FUEL' });
+
+        const tier = progressionRef.current.tier;
+        for (let i = 0; i < tier; i++) {
+            const up = MILESTONE_UPGRADES[i];
+            activeSystems.push({ icon: up.icon, label: up.name.split(' ')[0].toUpperCase() });
+        }
+
+        if (activeSystems.length > 0) {
+            ctx.textAlign = 'left';
+            ctx.font = 'bold 8px "Orbitron", sans-serif';
+            ctx.fillStyle = 'rgba(255,255,255,0.4)';
+            ctx.fillText('ACTIVE_LOADOUT', 12, 10);
+            activeSystems.forEach((sys, idx) => {
+                const sy = 24 + idx * 14;
+                ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                ctx.fillRect(10, sy - 8, 65, 12);
+                ctx.fillStyle = '#67E8F9';
+                ctx.font = '10px serif';
+                ctx.fillText(sys.icon, 12, sy);
+                ctx.font = 'bold 8px "Orbitron", sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.fillText(sys.label, 28, sy - 1);
+            });
+        }
 
         // --- STREAK FIRE EFFECT ---
         if (streakRef.current >= 5) {
@@ -1576,23 +1743,45 @@ const StraitOfChaos = () => {
             const mt = milestoneToastRef.current;
             const alpha = Math.min(1, mt.timer / 30);
             const boxW = Math.min(340, W - 40);
-            const boxH = 56;
+            const boxH = 64;
             const x = (W - boxW) / 2;
-            const y = 112;
+            const y = 140;
+
+            // Screen pulse on reveal
+            if (mt.timer > 120) {
+                ctx.fillStyle = mt.color || '#22D3EE';
+                ctx.globalAlpha = (mt.timer - 120) / 30 * 0.2;
+                ctx.fillRect(0, 0, W, H);
+            }
+
             ctx.globalAlpha = alpha;
-            ctx.fillStyle = 'rgba(5,15,25,0.9)';
+            // Glitch effect shadow
+            if (!accessibilityPrefs.reducedMotion && mt.timer % 10 < 3) {
+                ctx.fillStyle = '#FF00FF';
+                ctx.fillRect(x + 2, y + 2, boxW, boxH);
+            }
+
+            ctx.fillStyle = 'rgba(5,15,35,0.95)';
             ctx.fillRect(x, y, boxW, boxH);
-            ctx.strokeStyle = '#22D3EE';
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = mt.color || '#22D3EE';
+            ctx.lineWidth = 2;
             ctx.strokeRect(x, y, boxW, boxH);
-            ctx.font = 'bold 11px "Orbitron", monospace';
-            ctx.fillStyle = '#67E8F9';
+
+            // Decorative corners
+            ctx.beginPath();
+            ctx.moveTo(x, y + 15); ctx.lineTo(x, y); ctx.lineTo(x + 15, y);
+            ctx.moveTo(x + boxW - 15, y); ctx.lineTo(x + boxW, y); ctx.lineTo(x + boxW, y + 15);
+            ctx.stroke();
+
+            ctx.font = '900 13px "Orbitron", sans-serif';
+            ctx.fillStyle = mt.color || '#67E8F9';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(mt.title, W / 2, y + 18);
-            ctx.font = '10px "Inter", sans-serif';
+            ctx.fillText(mt.title, W / 2, y + 24);
+
+            ctx.font = '600 11px "Inter", sans-serif';
             ctx.fillStyle = '#E5E7EB';
-            ctx.fillText(mt.detail, W / 2, y + 37);
+            ctx.fillText(mt.detail, W / 2, y + 46);
             ctx.globalAlpha = 1;
         }
 
@@ -1756,6 +1945,22 @@ const StraitOfChaos = () => {
     const nextMilestoneDelta = scoreTier >= MILESTONE_UPGRADES.length ? 0 : (10 - (score % 10));
     const phase = getEscalationPhase(score);
 
+    const buyUpgrade = (itemId) => {
+        const item = SHOP_ITEMS[itemId];
+        if (!item || warFunds < item.cost || purchasedUpgrades.includes(itemId)) return;
+        const newFunds = warFunds - item.cost;
+        const newUpgrades = [...purchasedUpgrades, itemId];
+        setWarFunds(newFunds);
+        saveWarFunds(newFunds);
+        setPurchasedUpgrades(newUpgrades);
+        savePurchasedUpgrades(newUpgrades);
+        createParticles(200, 350, '#FFD700', 30); // Celebration particles
+    };
+
+    const addFloatingText = (x, y, text, color = '#FFD700') => {
+        floatingTextsRef.current.push({ x, y, text, life: 60, color });
+    };
+
     return (
         <div
             className={`soc-root${accessibility.largeUI ? ' soc-large-ui' : ''}${accessibility.highContrast ? ' soc-high-contrast' : ''}${accessibility.reducedMotion ? ' soc-reduced-motion' : ''}`}
@@ -1778,7 +1983,7 @@ const StraitOfChaos = () => {
         .soc-wrap canvas { display: block; width: 100%; height: 100%; touch-action: manipulation; }
         .soc-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
         .soc-score { position: absolute; top: clamp(8px,3vw,24px); left: 0; right: 0; text-align: center; font-family: 'Orbitron', monospace; font-size: clamp(24px,6vw,48px); font-weight: 900; color: #fff; text-shadow: 0 0 15px ${phase.glow}; z-index: 10; letter-spacing: 2px; }
-        .soc-screen { pointer-events: auto; background: rgba(5, 5, 10, 0.96); backdrop-filter: blur(20px); border: 1px solid rgba(239,68,68,0.5); border-radius: 16px; padding: 0; text-align: center; max-width: 90%; width: clamp(320px, 85vw, 460px); box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 20px rgba(239,68,68,0.2); animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden; position: relative; }
+        .soc-screen { pointer-events: auto; background: rgba(5, 5, 10, 0.96); backdrop-filter: blur(20px); border: 1px solid rgba(239,68,68,0.5); border-radius: 16px; padding: 0; text-align: center; max-width: 90%; width: clamp(320px, 85vw, 460px); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 20px rgba(239,68,68,0.2); animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden; position: relative; }
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.95) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         
         /* New Header/Tab System */
@@ -1788,8 +1993,24 @@ const StraitOfChaos = () => {
         .soc-tab-btn { flex: 1; background: transparent; border: none; padding: 10px; color: #666; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s; border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 1px; }
         .soc-tab-btn.active { color: #EF4444; border-bottom-color: #EF4444; background: rgba(239, 68, 68, 0.05); }
         .soc-tab-btn:hover:not(.active) { color: #aaa; background: rgba(255, 255, 255, 0.03); }
+        
+        /* Shop Styles */
+        .soc-shop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 12px; background: rgba(245, 158, 11, 0.1); border-radius: 10px; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .soc-shop-funds { font-family: 'Orbitron', sans-serif; font-size: 18px; color: #F59E0B; font-weight: 900; }
+        .soc-shop-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+        .soc-shop-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 14px; display: flex; gap: 14px; align-items: center; transition: all 0.2s; position: relative; }
+        .soc-shop-item.purchased { opacity: 0.7; border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.02); }
+        .soc-shop-item.locked { opacity: 0.5; filter: grayscale(1); }
+        .soc-shop-icon { font-size: 24px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border-radius: 8px; flex-shrink: 0; }
+        .soc-shop-info { flex: 1; text-align: left; }
+        .soc-shop-name { display: block; font-family: 'Orbitron', sans-serif; font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 2px; }
+        .soc-shop-desc { display: block; font-family: 'Inter', sans-serif; font-size: 10px; color: #94a3b8; line-height: 1.3; }
+        .soc-shop-action { flex-shrink: 0; }
+        .soc-btn-buy { background: #F59E0B; color: #000; font-size: 10px; padding: 8px 12px; min-height: 32px; box-shadow: 0 4px 10px rgba(245,158,11,0.2); }
+        .soc-btn-buy:disabled { background: #333; color: #666; box-shadow: none; cursor: not-allowed; }
+        .soc-purchased-tag { color: #22C55E; font-family: 'Orbitron', sans-serif; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 
-        .soc-body { padding: 20px; max-height: 70vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(239, 68, 68, 0.3) transparent; }
+        .soc-body { padding: 20px; flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(239, 68, 68, 0.3) transparent; }
         .soc-body::-webkit-scrollbar { width: 4px; }
         .soc-body::-webkit-scrollbar-thumb { background: rgba(239, 68, 68, 0.3); border-radius: 10px; }
         
@@ -1975,7 +2196,8 @@ const StraitOfChaos = () => {
                                 <h1>Strait of Chaos</h1>
                                 <div className="soc-tabs">
                                     <button className={`soc-tab-btn ${activeTab === 'MISSION' ? 'active' : ''}`} onClick={() => setActiveTab('MISSION')}>Mission</button>
-                                    <button className={`soc-tab-btn ${activeTab === 'INTEL' ? 'active' : ''}`} onClick={() => setActiveTab('INTEL')}>Intelligence</button>
+                                    <button className={`soc-tab-btn ${activeTab === 'SHOP' ? 'active' : ''}`} onClick={() => setActiveTab('SHOP')}>Shop</button>
+                                    <button className={`soc-tab-btn ${activeTab === 'INTEL' ? 'active' : ''}`} onClick={() => setActiveTab('INTEL')}>Intel</button>
                                 </div>
                             </div>
 
@@ -2098,6 +2320,46 @@ const StraitOfChaos = () => {
                                                 <span className="soc-a11y-pill">{accessibility.highContrast ? 'On' : 'Off'}</span>
                                             </button>
                                         </div>
+                                    </>
+                                ) : activeTab === 'SHOP' ? (
+                                    <>
+                                        <div className="soc-shop-header">
+                                            <div className="soc-label">Available Budget</div>
+                                            <div className="soc-shop-funds">${warFunds.toLocaleString()}</div>
+                                        </div>
+
+                                        <div className="soc-shop-grid">
+                                            {Object.values(SHOP_ITEMS).map(item => {
+                                                const isPurchased = purchasedUpgrades.includes(item.id);
+                                                const canAfford = warFunds >= item.cost;
+                                                return (
+                                                    <div key={item.id} className={`soc-shop-item ${isPurchased ? 'purchased' : ''}`}>
+                                                        <div className="soc-shop-icon">{item.icon}</div>
+                                                        <div className="soc-shop-info">
+                                                            <span className="soc-shop-name">{item.label}</span>
+                                                            <span className="soc-shop-desc">{item.desc}</span>
+                                                        </div>
+                                                        <div className="soc-shop-action">
+                                                            {isPurchased ? (
+                                                                <span className="soc-purchased-tag">Active</span>
+                                                            ) : (
+                                                                <button
+                                                                    className="soc-btn soc-btn-buy"
+                                                                    disabled={!canAfford}
+                                                                    onClick={(e) => { e.stopPropagation(); buyUpgrade(item.id); }}
+                                                                >
+                                                                    ${item.cost}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        <p style={{ marginTop: '20px', fontSize: '10px', color: '#555', fontStyle: 'italic' }}>
+                                            * Permanent upgrades are applied to all flights. Target "Sanction Pillars" ($$$) in Hard Mode to earn funds.
+                                        </p>
                                     </>
                                 ) : (
                                     <>
