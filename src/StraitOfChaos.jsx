@@ -494,8 +494,9 @@ const StraitOfChaos = () => {
     const nearMissTextRef = useRef({ timer: 0, x: 0, y: 0 });
     // Abilities
     const barrelRollRef = useRef({ active: false, timer: 0, cooldown: 0, angle: 0 });
-    const empRef = useRef({ charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0 });
+    const empRef = useRef({ charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0, activeTimer: 0 });
     const touchStartRef = useRef({ y: 0, time: 0 });
+    const isHoldingRef = useRef(false);
 
     const updateCanvasSize = useCallback(() => {
         const maxW = window.innerWidth, maxH = window.innerHeight;
@@ -664,7 +665,8 @@ const StraitOfChaos = () => {
         comboTextRef.current = { text: '', timer: 0 };
         nearMissTextRef.current = { timer: 0, x: 0, y: 0 };
         barrelRollRef.current = { active: false, timer: 0, cooldown: 0, angle: 0 };
-        empRef.current = { charge: 0, maxCharge: progressionRef.current.empMaxCharge, blastTimer: 0, blastX: 0, blastY: 0 };
+        empRef.current = { charge: 0, maxCharge: progressionRef.current.empMaxCharge, blastTimer: 0, blastX: 0, blastY: 0, activeTimer: 0 };
+        isHoldingRef.current = false;
         setConfirmRestart(false);
         setTutorialUi({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0 });
         setDeathReport({ label: '', tip: '' });
@@ -762,45 +764,18 @@ const StraitOfChaos = () => {
         const emp = empRef.current;
         if (emp.charge < emp.maxCharge) return;
         emp.charge = 0;
-        emp.blastTimer = 30;
+        emp.activeTimer = 300; // 5 seconds at 60fps
+        emp.blastTimer = 30; // Flash effect
         emp.blastX = birdRef.current.x;
         emp.blastY = birdRef.current.y;
-        // Destroy all missiles
+        
+        // Initial blast destruction
         missilesRef.current.forEach(m => {
             createParticles(m.x, m.y, '#00FFFF', 15);
             createParticles(m.x, m.y, '#FF4400', 8);
             missilesDodgedRef.current++;
         });
         missilesRef.current = [];
-
-        // EMP Shield: Destroy nearby pipes
-        if (progressionRef.current.empWallBreak) {
-            const bird = birdRef.current;
-            for (let i = pipesRef.current.length - 1; i >= 0; i--) {
-                const pipe = pipesRef.current[i];
-                const dx = (pipe.x + pipe.width / 2) - bird.x;
-                const dy = (pipe.topHeight + (pipe.bottomY - pipe.topHeight) / 2) - bird.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                // Blast radius covers most of the local vertical space
-                if (dist < 280) {
-                    createParticles(pipe.x + pipe.width / 2, bird.y, '#00FFFF', 20);
-                    createParticles(pipe.x + pipe.width / 2, bird.y, '#FF6600', 12);
-                    if (!pipe.passed) {
-                        pipe.passed = true;
-                        scoreRef.current += 1;
-                        setScore(scoreRef.current);
-                        if (pipe.isSanction) {
-                            const amount = 100;
-                            const funds = readWarFunds() + amount;
-                            saveWarFunds(funds); setWarFunds(funds);
-                            addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
-                        }
-                    }
-                    pipesRef.current.splice(i, 1);
-                }
-            }
-        }
 
         createParticles(birdRef.current.x, birdRef.current.y, '#00FFFF', 25);
         const t = tutorialRef.current;
@@ -940,6 +915,14 @@ const StraitOfChaos = () => {
         if (tutorial.active) currentSpeed *= 0.78;
         if (bird.sanctionSlowTimer > 0) { currentSpeed *= 0.5; bird.sanctionSlowTimer--; }
 
+        // Continuous Thrust (Hold to Climb)
+        if (isHoldingRef.current) {
+            bird.velocity += profile.flapStrength * 0.18; // Apply 18% of flap strength as continuous acceleration
+            if (frameCountRef.current % 6 === 0) {
+                createParticles(bird.x, bird.y, (factionRef.current || FACTIONS.USA).color, 1);
+            }
+        }
+
         bird.velocity += profile.gravity;
         if (Number.isFinite(profile.maxFallVelocity)) {
             bird.velocity = Math.min(bird.velocity, profile.maxFallVelocity);
@@ -953,7 +936,14 @@ const StraitOfChaos = () => {
         const emp = empRef.current;
         if (br.active) { br.timer--; br.angle += Math.PI / 6; if (br.timer <= 0) br.active = false; }
         if (br.cooldown > 0) br.cooldown--;
-        const isInvincible = br.active || (progressionRef.current.empWallBreak && emp.blastTimer > 0);
+        if (emp.activeTimer > 0) {
+            emp.activeTimer--;
+            // Pulsing effect while active
+            if (frameCountRef.current % 5 === 0) {
+                createParticles(bird.x, bird.y, '#00FFFF', 2);
+            }
+        }
+        const isInvincible = br.active || emp.activeTimer > 0;
 
         const hitTop = bird.y - bird.radius < 0;
         const hitBottom = bird.y + bird.radius > CONFIG.INTERNAL_HEIGHT;
@@ -1059,7 +1049,22 @@ const StraitOfChaos = () => {
 
             if (hitT || hitB) {
                 if (isInvincible) {
-                    // Barrel roll: phase through
+                    // Phase through OR destroy if EMP is active
+                    if (emp.activeTimer > 0) {
+                        createParticles(pipe.x + pipe.width / 2, bird.y, '#00FFFF', 15);
+                        createParticles(pipe.x + pipe.width / 2, bird.y, '#FF6600', 10);
+                        if (!pipe.passed) {
+                            pipe.passed = true; scoreRef.current += 1; setScore(scoreRef.current);
+                            if (pipe.isSanction) {
+                                const amount = 100;
+                                const funds = readWarFunds() + amount;
+                                saveWarFunds(funds); setWarFunds(funds);
+                                addFloatingText(pipe.x + pipe.width / 2, bird.y, `+$${amount}`, '#FFD700');
+                            }
+                        }
+                        pipesRef.current.splice(i, 1);
+                        continue;
+                    }
                     createParticles(bird.x, bird.y, '#00FFFF', 5);
                 } else if (pipe.isSanction) {
                     bird.sanctionSlowTimer = 90;
@@ -1209,8 +1214,11 @@ const StraitOfChaos = () => {
             // Collision with bird
             if (dist < bird.radius + 8) {
                 if (isInvincible) {
-                    // Barrel roll: dodge missile
+                    // Barrel roll: dodge missile | EMP: destroy
                     createParticles(m.x, m.y, '#00FFFF', 12);
+                    if (emp.activeTimer > 0) {
+                        createParticles(m.x, m.y, '#FF4444', 15);
+                    }
                     missilesDodgedRef.current++;
                     directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.1);
                     missilesRef.current.splice(i, 1); continue;
@@ -1272,6 +1280,9 @@ const StraitOfChaos = () => {
             if (Math.abs(dx) < p.width / 2 + bird.radius && Math.abs(dy) < p.height / 2 + bird.radius) {
                 if (isInvincible) {
                     createParticles(p.x, p.y, '#00FFFF', 10);
+                    if (emp.activeTimer > 0) {
+                        createParticles(p.x, p.y, '#8B4513', 15);
+                    }
                     directorRef.current.pressure = Math.max(0, directorRef.current.pressure - 0.08);
                     piratesRef.current.splice(i, 1); continue;
                 } else if (bird.shieldActive) {
@@ -1428,10 +1439,36 @@ const StraitOfChaos = () => {
 
         // Shield bubble
         if (bird.shieldActive) {
+            ctx.save();
             ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 2;
             ctx.arc(0, 0, bird.radius + 12 + Math.sin(frameCountRef.current * 0.2) * 2, 0, Math.PI * 2);
             ctx.stroke();
             ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+            ctx.restore();
+        }
+
+        // EMP active shield
+        const empD = empRef.current;
+        if (empD.activeTimer > 0) {
+            ctx.save();
+            const pulse = Math.sin(frameCountRef.current * 0.4) * 0.2 + 0.8;
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(0, 255, 255, ${pulse * 0.6})`;
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00FFFF';
+            ctx.arc(0, 0, bird.radius + 18 + Math.sin(frameCountRef.current * 0.8) * 3, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Inner glow rays
+            for (let i = 0; i < 8; i++) {
+                const angle = (frameCountRef.current * 0.05) + (i * Math.PI / 4);
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(angle) * (bird.radius + 5), Math.sin(angle) * (bird.radius + 5));
+                ctx.lineTo(Math.cos(angle) * (bird.radius + 25), Math.sin(angle) * (bird.radius + 25));
+                ctx.stroke();
+            }
+            ctx.restore();
         }
 
         // Sanction slow effect
@@ -1522,25 +1559,38 @@ const StraitOfChaos = () => {
         }
 
         // --- EMP CHARGE METER (bottom-right) ---
-        const empD = empRef.current;
         const empBarW = 60, empBarH = 8;
         const empX = W - empBarW - 12, empY = H - 44;
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(empX - 2, empY - 2, empBarW + 4, empBarH + 4);
         ctx.fillStyle = '#333';
         ctx.fillRect(empX, empY, empBarW, empBarH);
-        const empPct = empD.charge / empD.maxCharge;
-        const empColor = empPct >= 1 ? '#00FFFF' : '#0088AA';
-        ctx.fillStyle = empColor;
-        ctx.fillRect(empX, empY, empBarW * empPct, empBarH);
-        if (empPct >= 1) {
+        
+        if (empD.activeTimer > 0) {
+            // Show duration remaining
+            const activePct = empD.activeTimer / 300;
+            ctx.fillStyle = '#00FFFF';
+            ctx.fillRect(empX, empY, empBarW * activePct, empBarH);
             ctx.shadowBlur = 8; ctx.shadowColor = '#00FFFF';
-            ctx.fillRect(empX, empY, empBarW, empBarH);
+            ctx.strokeRect(empX, empY, empBarW, empBarH);
             ctx.shadowBlur = 0;
+            ctx.font = '8px "Orbitron", monospace'; ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+            ctx.fillText('⚡ EMP ACTIVE', empX + empBarW / 2, empY - 4);
+        } else {
+            const empPct = empD.charge / empD.maxCharge;
+            const empColor = empPct >= 1 ? '#00FFFF' : '#0088AA';
+            ctx.fillStyle = empColor;
+            ctx.fillRect(empX, empY, empBarW * empPct, empBarH);
+            if (empPct >= 1) {
+                ctx.shadowBlur = 10; ctx.shadowColor = '#00FFFF';
+                ctx.fillRect(empX, empY, empBarW, empBarH);
+                ctx.shadowBlur = 0;
+            }
+            ctx.font = '8px "Orbitron", monospace'; ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+            ctx.fillText(empPct >= 1 ? '⚡ EMP READY' : `⚡ ${empD.charge}/${empD.maxCharge}`, empX + empBarW / 2, empY - 4);
         }
-        ctx.font = '8px "Orbitron", monospace'; ctx.fillStyle = '#fff';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-        ctx.fillText(empPct >= 1 ? '⚡ EMP READY' : `⚡ ${empD.charge}/${empD.maxCharge}`, empX + empBarW / 2, empY - 4);
 
         // --- EMP SHOCKWAVE ---
         if (empD.blastTimer > 0) {
@@ -1866,6 +1916,7 @@ const StraitOfChaos = () => {
     const handleCanvasInteraction = (e) => {
         e.preventDefault();
         if (gameState === 'PLAYING') {
+            isHoldingRef.current = true;
             flap();
             const cx = e.touches ? e.touches[0].clientX : e.clientX;
             const cy = e.touches ? e.touches[0].clientY : e.clientY;
@@ -1877,7 +1928,12 @@ const StraitOfChaos = () => {
         }
     };
 
+    const handleRelease = useCallback(() => {
+        isHoldingRef.current = false;
+    }, []);
+
     const handleTouchEnd = (e) => {
+        handleRelease();
         if (gameState !== 'PLAYING') return;
         const endY = e.changedTouches?.[0]?.clientY;
         if (endY && touchStartRef.current.y) {
@@ -2110,7 +2166,8 @@ const StraitOfChaos = () => {
             <div className="soc-wrap">
                 {!accessibility.reducedMotion && !accessibility.highContrast && <div className="soc-crt" />}
                 <canvas ref={canvasRef} width={CONFIG.INTERNAL_WIDTH} height={CONFIG.INTERNAL_HEIGHT}
-                    onClick={handleCanvasInteraction} onTouchStart={handleCanvasInteraction} onTouchEnd={handleTouchEnd} />
+                    onMouseDown={handleCanvasInteraction} onMouseUp={handleRelease} onMouseLeave={handleRelease}
+                    onTouchStart={handleCanvasInteraction} onTouchEnd={handleTouchEnd} />
 
                 {/* Sound Toggle */}
                 <div className="soc-sound-btn" onClick={(e) => { e.stopPropagation(); setSoundEnabled(v => !v); }}>
@@ -2166,23 +2223,25 @@ const StraitOfChaos = () => {
                 {gameState === 'PLAYING' && (
                     <>
                         <div onClick={(e) => { e.stopPropagation(); triggerBarrelRoll(); }} style={{
-                            position: 'absolute', bottom: '50px', left: '14px', zIndex: 20, width: '52px', height: '52px',
-                            borderRadius: '50%', background: barrelRollRef.current.cooldown > 0 ? 'rgba(0,0,0,0.4)' : 'rgba(0,255,255,0.15)',
-                            border: `2px solid ${barrelRollRef.current.cooldown > 0 ? 'rgba(100,100,100,0.4)' : 'rgba(0,255,255,0.6)'}`,
+                            position: 'absolute', bottom: '60px', left: '20px', zIndex: 20, width: '64px', height: '64px',
+                            borderRadius: '50%', background: barrelRollRef.current.cooldown > 0 ? 'rgba(0,0,0,0.5)' : 'rgba(0,255,255,0.2)',
+                            border: `2px solid ${barrelRollRef.current.cooldown > 0 ? 'rgba(100,100,100,0.4)' : '#00FFFF'}`,
                             display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                            fontSize: '22px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
-                            boxShadow: barrelRollRef.current.cooldown <= 0 ? '0 0 12px rgba(0,255,255,0.3)' : 'none',
+                            fontSize: '28px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
+                            boxShadow: barrelRollRef.current.cooldown <= 0 ? '0 0 20px rgba(0,255,255,0.4)' : 'none',
+                            transition: 'all 0.1s active', transform: 'scale(1)',
                         }}>
                             🔄
                         </div>
                         <div onClick={(e) => { e.stopPropagation(); triggerEMP(); }} style={{
-                            position: 'absolute', bottom: '50px', right: '14px', zIndex: 20, width: '52px', height: '52px',
-                            borderRadius: '50%', background: empRef.current.charge >= empRef.current.maxCharge ? 'rgba(0,255,255,0.2)' : 'rgba(0,0,0,0.4)',
-                            border: `2px solid ${empRef.current.charge >= empRef.current.maxCharge ? 'rgba(0,255,255,0.7)' : 'rgba(100,100,100,0.3)'}`,
+                            position: 'absolute', bottom: '60px', right: '20px', zIndex: 20, width: '64px', height: '64px',
+                            borderRadius: '50%', background: empRef.current.charge >= empRef.current.maxCharge ? 'rgba(0,255,255,0.3)' : 'rgba(0,0,0,0.5)',
+                            border: `2px solid ${empRef.current.charge >= empRef.current.maxCharge ? '#00FFFF' : 'rgba(100,100,100,0.3)'}`,
                             display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                            fontSize: '22px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
-                            boxShadow: empRef.current.charge >= empRef.current.maxCharge ? '0 0 15px rgba(0,255,255,0.4)' : 'none',
+                            fontSize: '28px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
+                            boxShadow: empRef.current.charge >= empRef.current.maxCharge ? '0 0 25px rgba(0,255,255,0.5)' : 'none',
                             opacity: empRef.current.charge >= empRef.current.maxCharge ? 1 : 0.5,
+                            animation: empRef.current.charge >= empRef.current.maxCharge ? 'pulse 1.5s infinite' : 'none',
                         }}>
                             ⚡
                         </div>
