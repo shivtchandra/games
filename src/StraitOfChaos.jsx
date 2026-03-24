@@ -144,6 +144,31 @@ const DAILY_MEDAL_TARGETS = {
     HARD: { bronze: 6, silver: 12, gold: 18 },
 };
 
+const DRONE_TIER_LOADOUT = [
+    { tier: 1, role: 'Tactical', model: 'Black Hornet 4' },
+    { tier: 2, role: 'Attributable', model: 'LUCAS' },
+    { tier: 3, role: 'Strike', model: 'MQ-9 Reaper' },
+    { tier: 4, role: 'Wingman', model: 'YFQ-44A (Anduril)' },
+    { tier: 5, role: 'Strategic', model: 'RQ-4 Global Hawk' },
+];
+
+const STRIKE_TARGET_TYPES = {
+    OIL_SHIPMENT: { label: 'Oil Shipment', icon: '🚢', reward: 180, score: 1, color: '#F59E0B' },
+    PORT_DEPOT: { label: 'Port Depot', icon: '🏗️', reward: 220, score: 1, color: '#FB923C' },
+    PIPELINE_NODE: { label: 'Pipeline Node', icon: '🛢️', reward: 150, score: 1, color: '#FDE047' },
+};
+
+const STRIKE_BALANCE_BY_DIFFICULTY = {
+    EASY: { maxCharge: 5, cooldown: 180, blastRadius: 190, spawnEvery: 470, minSpawnScore: 5, targetSpeedMult: 0.92, chargePerClear: 1, chargePerOil: 2, rewardMult: 1 },
+    MEDIUM: { maxCharge: 6, cooldown: 210, blastRadius: 175, spawnEvery: 420, minSpawnScore: 6, targetSpeedMult: 1, chargePerClear: 1, chargePerOil: 2, rewardMult: 1 },
+    HARD: { maxCharge: 7, cooldown: 240, blastRadius: 165, spawnEvery: 360, minSpawnScore: 7, targetSpeedMult: 1.13, chargePerClear: 1, chargePerOil: 1.5, rewardMult: 1.15 },
+};
+
+const FACTION_STRIKE_PROFILE = {
+    USA: { radiusMult: 1.06, rewardMult: 1, cooldownMult: 1 },
+    IRAN: { radiusMult: 0.96, rewardMult: 1.12, cooldownMult: 0.94 },
+};
+
 const PATTERN_LIBRARY = {
     EASY: [
         { pattern: 'wide', minScore: 0, weight: 4.8 },
@@ -314,6 +339,12 @@ function getDeathReportFromReason(reason) {
     return DEATH_REASON_DETAILS[reason] || DEATH_REASON_DETAILS.UNKNOWN;
 }
 
+function pickStrikeTargetType(score, randomValue) {
+    if (score < 10) return randomValue < 0.7 ? 'OIL_SHIPMENT' : 'PIPELINE_NODE';
+    if (score < 20) return randomValue < 0.45 ? 'OIL_SHIPMENT' : (randomValue < 0.78 ? 'PIPELINE_NODE' : 'PORT_DEPOT');
+    return randomValue < 0.34 ? 'OIL_SHIPMENT' : (randomValue < 0.64 ? 'PIPELINE_NODE' : 'PORT_DEPOT');
+}
+
 function pickPatternForLevel(levelKey, score, randomValue, forceRelief = false) {
     const library = PATTERN_LIBRARY[levelKey] || PATTERN_LIBRARY[DEFAULT_DIFFICULTY];
     const eligible = library.filter((entry) => score >= entry.minScore && (!forceRelief || RELIEF_PATTERNS.has(entry.pattern)));
@@ -465,6 +496,7 @@ const StraitOfChaos = () => {
     const touchRipplesRef = useRef([]);
     const missilesRef = useRef([]);
     const piratesRef = useRef([]);
+    const strikeTargetsRef = useRef([]);
     const trumpQuoteRef = useRef({ text: '', timer: 0 });
     const failSoundRef = useRef(null);
     const bgmRef = useRef(null);
@@ -495,6 +527,10 @@ const StraitOfChaos = () => {
     // Abilities
     const barrelRollRef = useRef({ active: false, timer: 0, cooldown: 0, angle: 0 });
     const empRef = useRef({ charge: 0, maxCharge: 5, blastTimer: 0, blastX: 0, blastY: 0, activeTimer: 0 });
+    const strikeRef = useRef({
+        charge: 0, maxCharge: 6, cooldown: 0, blastTimer: 0, blastX: 0, blastY: 0, report: '', reportTimer: 0, totalHits: 0,
+        blastRadius: 175, cooldownBase: 210, spawnEvery: 420, minSpawnScore: 6, targetSpeedMult: 1, chargePerClear: 1, chargePerOil: 2, rewardMult: 1,
+    });
     const touchStartRef = useRef({ y: 0, time: 0 });
     const isHoldingRef = useRef(false);
 
@@ -647,7 +683,7 @@ const StraitOfChaos = () => {
         for (const p of particlesRef.current) particlePoolRef.current.push(p);
         for (const r of touchRipplesRef.current) ripplePoolRef.current.push(r);
         pipesRef.current = []; powerupsRef.current = []; particlesRef.current = [];
-        touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = [];
+        touchRipplesRef.current = []; missilesRef.current = []; piratesRef.current = []; strikeTargetsRef.current = [];
         trumpQuoteRef.current = { text: '', timer: 0 };
         floatingTextsRef.current = [];
         frameCountRef.current = 0;
@@ -666,6 +702,28 @@ const StraitOfChaos = () => {
         nearMissTextRef.current = { timer: 0, x: 0, y: 0 };
         barrelRollRef.current = { active: false, timer: 0, cooldown: 0, angle: 0 };
         empRef.current = { charge: 0, maxCharge: progressionRef.current.empMaxCharge, blastTimer: 0, blastX: 0, blastY: 0, activeTimer: 0 };
+        const strikeBalance = STRIKE_BALANCE_BY_DIFFICULTY[levelKey] || STRIKE_BALANCE_BY_DIFFICULTY.MEDIUM;
+        const factionKey = factionRef.current?.name === 'IRAN' ? 'IRAN' : 'USA';
+        const factionStrike = FACTION_STRIKE_PROFILE[factionKey];
+        strikeRef.current = {
+            charge: 0,
+            maxCharge: strikeBalance.maxCharge,
+            cooldown: 0,
+            blastTimer: 0,
+            blastX: 0,
+            blastY: 0,
+            report: '',
+            reportTimer: 0,
+            totalHits: 0,
+            blastRadius: strikeBalance.blastRadius * factionStrike.radiusMult,
+            cooldownBase: Math.round(strikeBalance.cooldown * factionStrike.cooldownMult),
+            spawnEvery: strikeBalance.spawnEvery,
+            minSpawnScore: strikeBalance.minSpawnScore,
+            targetSpeedMult: strikeBalance.targetSpeedMult,
+            chargePerClear: strikeBalance.chargePerClear,
+            chargePerOil: strikeBalance.chargePerOil,
+            rewardMult: strikeBalance.rewardMult * factionStrike.rewardMult,
+        };
         isHoldingRef.current = false;
         setConfirmRestart(false);
         setTutorialUi({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0 });
@@ -783,6 +841,92 @@ const StraitOfChaos = () => {
             completeTutorial();
         }
     }, [completeTutorial]);
+
+    const addStrikeCharge = useCallback((amount = 1) => {
+        if (!Number.isFinite(amount) || amount <= 0) return;
+        const strike = strikeRef.current;
+        strike.charge = Math.min(strike.maxCharge, strike.charge + amount);
+    }, []);
+
+    const triggerPrecisionStrike = useCallback(() => {
+        const strike = strikeRef.current;
+        if (strike.charge < strike.maxCharge || strike.cooldown > 0) return;
+
+        strike.charge = 0;
+        strike.cooldown = strike.cooldownBase || 210;
+        strike.blastTimer = 36;
+        strike.blastX = Math.min(CONFIG.INTERNAL_WIDTH - 45, birdRef.current.x + 110);
+        strike.blastY = birdRef.current.y;
+        const blastRadius = strike.blastRadius || 175;
+
+        let destroyed = 0;
+        let fundsEarned = 0;
+        let scoreEarned = 0;
+
+        for (let i = missilesRef.current.length - 1; i >= 0; i--) {
+            const m = missilesRef.current[i];
+            const dx = m.x - strike.blastX;
+            const dy = m.y - strike.blastY;
+            if ((dx * dx) + (dy * dy) <= (blastRadius * 0.95) * (blastRadius * 0.95)) {
+                createParticles(m.x, m.y, '#FF4400', 14);
+                createParticles(m.x, m.y, '#00FFFF', 10);
+                missilesRef.current.splice(i, 1);
+                missilesDodgedRef.current++;
+                destroyed++;
+            }
+        }
+
+        for (let i = piratesRef.current.length - 1; i >= 0; i--) {
+            const p = piratesRef.current[i];
+            const dx = p.x - strike.blastX;
+            const dy = p.y - strike.blastY;
+            if ((dx * dx) + (dy * dy) <= blastRadius * blastRadius) {
+                createParticles(p.x, p.y, '#8B4513', 20);
+                createParticles(p.x, p.y, '#00FFFF', 8);
+                piratesRef.current.splice(i, 1);
+                destroyed++;
+            }
+        }
+
+        for (let i = strikeTargetsRef.current.length - 1; i >= 0; i--) {
+            const t = strikeTargetsRef.current[i];
+            const dx = t.x - strike.blastX;
+            const dy = t.y - strike.blastY;
+            if ((dx * dx) + (dy * dy) <= blastRadius * blastRadius) {
+                const typeMeta = STRIKE_TARGET_TYPES[t.type];
+                createParticles(t.x, t.y, typeMeta.color, 24);
+                createParticles(t.x, t.y, '#FF3B30', 18);
+                strikeTargetsRef.current.splice(i, 1);
+                destroyed++;
+                fundsEarned += Math.round(typeMeta.reward * (strike.rewardMult || 1));
+                scoreEarned += typeMeta.score;
+                addFloatingText(t.x, t.y - 14, `+${typeMeta.icon} ${typeMeta.label}`, '#FACC15');
+            }
+        }
+
+        if (scoreEarned > 0) {
+            scoreRef.current += scoreEarned;
+            setScore(scoreRef.current);
+            if (SCORE_HEADLINES[scoreRef.current]) activeHeadlinesRef.current.push(SCORE_HEADLINES[scoreRef.current]);
+        }
+        if (fundsEarned > 0) {
+            const funds = readWarFunds() + fundsEarned;
+            saveWarFunds(funds);
+            setWarFunds(funds);
+            addFloatingText(strike.blastX, strike.blastY - 24, `+$${fundsEarned}`, '#FFD700');
+        }
+
+        strike.totalHits += destroyed;
+        strike.report = destroyed > 0 ? `STRIKE CONFIRMED: ${destroyed} TARGETS` : 'STRIKE MISSED: NO LOCK';
+        strike.reportTimer = 180;
+
+        activeHeadlinesRef.current.push(
+            destroyed > 0
+                ? `🎯 Precision strike neutralized ${destroyed} hostile assets near shipping lanes`
+                : '⚠️ Precision strike expended with no confirmed target damage'
+        );
+        createParticles(strike.blastX, strike.blastY, '#00FFFF', 30);
+    }, []);
 
     const addTouchRipple = (cx, cy) => {
         const canvas = canvasRef.current; if (!canvas) return;
@@ -1123,6 +1267,7 @@ const StraitOfChaos = () => {
                 if (SCORE_HEADLINES[scoreRef.current]) activeHeadlinesRef.current.push(SCORE_HEADLINES[scoreRef.current]);
                 // EMP charge
                 if (empRef.current.charge < empRef.current.maxCharge) empRef.current.charge++;
+                addStrikeCharge(strikeRef.current.chargePerClear || 1);
                 // Near-miss detection (within 8px of pipe edge)
                 const nearTop = pipe.topHeight > 0 && Math.abs(bT - pipe.topHeight) < 8;
                 const nearBot = pipe.bottomY < CONFIG.INTERNAL_HEIGHT && Math.abs(bB - pipe.bottomY) < 8;
@@ -1142,6 +1287,7 @@ const StraitOfChaos = () => {
             const d = Math.sqrt((bird.x - p.x) ** 2 + (bird.y - p.y) ** 2);
             if (p.active && d < bird.radius + CONFIG.POWERUP_SIZE / 2) {
                 p.active = false; activatePowerup(p.type);
+                if (p.type === 'OIL') addStrikeCharge(strikeRef.current.chargePerOil || 2);
                 createParticles(p.x, p.y, POWERUP_TYPES[p.type].color, 10);
                 powerupsRef.current.splice(i, 1);
             }
@@ -1296,6 +1442,28 @@ const StraitOfChaos = () => {
             if (p.x < -60) piratesRef.current.splice(i, 1);
         }
 
+        const strikeOps = strikeRef.current;
+        const strikeSpawnEvery = Math.max(220, Math.round((strikeOps.spawnEvery || 420) - Math.min(90, directorRef.current.pressure * 40)));
+        if (!tutorial.active && scoreRef.current >= (strikeOps.minSpawnScore || 6) && frameCountRef.current % strikeSpawnEvery === 0) {
+            const type = pickStrikeTargetType(scoreRef.current, gameRandom());
+            strikeTargetsRef.current.push({
+                x: CONFIG.INTERNAL_WIDTH + 60,
+                y: gameRandomRange(90, CONFIG.INTERNAL_HEIGHT - 120),
+                type,
+                width: 46,
+                height: 28,
+                speed: (0.9 + gameRandom() * 0.5) * (strikeOps.targetSpeedMult || 1),
+                bobOffset: gameRandom() * Math.PI * 2,
+            });
+        }
+
+        for (let i = strikeTargetsRef.current.length - 1; i >= 0; i--) {
+            const t = strikeTargetsRef.current[i];
+            t.x -= t.speed;
+            t.y = t.y + Math.sin(frameCountRef.current * 0.04 + t.bobOffset) * 0.5;
+            if (t.x < -80) strikeTargetsRef.current.splice(i, 1);
+        }
+
         // Trump quote timer
         if (trumpQuoteRef.current.timer > 0) trumpQuoteRef.current.timer--;
         // Combo & near-miss timers
@@ -1303,6 +1471,9 @@ const StraitOfChaos = () => {
         if (nearMissTextRef.current.timer > 0) nearMissTextRef.current.timer--;
         // EMP blast timer
         if (empRef.current.blastTimer > 0) empRef.current.blastTimer--;
+        if (strikeRef.current.blastTimer > 0) strikeRef.current.blastTimer--;
+        if (strikeRef.current.cooldown > 0) strikeRef.current.cooldown--;
+        if (strikeRef.current.reportTimer > 0) strikeRef.current.reportTimer--;
         if (milestoneToastRef.current.timer > 0) milestoneToastRef.current.timer--;
         // Dynamic BGM intensity by score phase
         if (bgmRef.current) {
@@ -1314,7 +1485,7 @@ const StraitOfChaos = () => {
             bgmRef.current.volume += (targetVol - bgmRef.current.volume) * 0.06;
             bgmRef.current.playbackRate += (targetRate - bgmRef.current.playbackRate) * 0.06;
         }
-    }, [applyMilestoneUpgrades, completeTutorial, gameOver]);
+    }, [addStrikeCharge, applyMilestoneUpgrades, completeTutorial, gameOver]);
 
     // --- DRAW ---
     const draw = useCallback(() => {
@@ -1592,6 +1763,41 @@ const StraitOfChaos = () => {
             ctx.fillText(empPct >= 1 ? '⚡ EMP READY' : `⚡ ${empD.charge}/${empD.maxCharge}`, empX + empBarW / 2, empY - 4);
         }
 
+        const strikeData = strikeRef.current;
+        const strikeBarW = 96, strikeBarH = 8;
+        const strikeX = 12, strikeY = H - 44;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(strikeX - 2, strikeY - 2, strikeBarW + 4, strikeBarH + 4);
+        ctx.fillStyle = '#333';
+        ctx.fillRect(strikeX, strikeY, strikeBarW, strikeBarH);
+        const strikePct = strikeData.charge / strikeData.maxCharge;
+        const strikeReady = strikeData.charge >= strikeData.maxCharge && strikeData.cooldown <= 0;
+        ctx.fillStyle = strikeReady ? '#FFB020' : '#A16207';
+        ctx.fillRect(strikeX, strikeY, strikeBarW * strikePct, strikeBarH);
+        if (strikeReady) {
+            ctx.shadowBlur = 10; ctx.shadowColor = '#F97316';
+            ctx.strokeStyle = '#F97316';
+            ctx.strokeRect(strikeX, strikeY, strikeBarW, strikeBarH);
+            ctx.shadowBlur = 0;
+        }
+        ctx.font = '8px "Orbitron", monospace';
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        const strikeLabel = strikeData.cooldown > 0
+            ? `🎯 STRIKE CD ${Math.ceil(strikeData.cooldown / 60)}s`
+            : strikeReady
+                ? '🎯 STRIKE READY (R)'
+                : `🎯 ${strikeData.charge}/${strikeData.maxCharge}`;
+        ctx.fillText(strikeLabel, strikeX, strikeY - 4);
+        if (strikeData.reportTimer > 0) {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.font = 'bold 10px "Orbitron", monospace';
+            ctx.fillStyle = strikeData.report.includes('CONFIRMED') ? '#34D399' : '#FCA5A5';
+            ctx.fillText(strikeData.report, W / 2, 12);
+        }
+
         // --- EMP SHOCKWAVE ---
         if (empD.blastTimer > 0) {
             const progress = 1 - empD.blastTimer / 30;
@@ -1601,6 +1807,18 @@ const StraitOfChaos = () => {
             ctx.beginPath(); ctx.arc(empD.blastX, empD.blastY, radius, 0, Math.PI * 2); ctx.stroke();
             ctx.strokeStyle = 'rgba(0,255,255,0.3)'; ctx.lineWidth = 8 - progress * 7;
             ctx.beginPath(); ctx.arc(empD.blastX, empD.blastY, radius * 0.7, 0, Math.PI * 2); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        if (strikeData.blastTimer > 0) {
+            const progress = 1 - strikeData.blastTimer / 36;
+            const radius = progress * 230;
+            ctx.globalAlpha = 1 - progress;
+            ctx.strokeStyle = '#FFB020';
+            ctx.lineWidth = 4 - progress * 2.5;
+            ctx.beginPath(); ctx.arc(strikeData.blastX, strikeData.blastY, radius, 0, Math.PI * 2); ctx.stroke();
+            ctx.strokeStyle = 'rgba(255, 80, 0, 0.45)'; ctx.lineWidth = 10 - progress * 8;
+            ctx.beginPath(); ctx.arc(strikeData.blastX, strikeData.blastY, radius * 0.75, 0, Math.PI * 2); ctx.stroke();
             ctx.globalAlpha = 1;
         }
 
@@ -1676,6 +1894,30 @@ const StraitOfChaos = () => {
                 ctx.fillStyle = '#FF4400';
                 ctx.beginPath(); ctx.arc(22, 2, 4, 0, Math.PI * 2); ctx.fill();
             }
+            ctx.restore();
+        });
+
+        // --- STRIKE TARGETS (OIL SHIPMENTS / DEPOTS / NODES) ---
+        strikeTargetsRef.current.forEach(t => {
+            const tm = STRIKE_TARGET_TYPES[t.type];
+            ctx.save();
+            ctx.translate(t.x, t.y);
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = tm.color;
+            ctx.fillStyle = 'rgba(8,8,10,0.85)';
+            ctx.strokeStyle = tm.color;
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(-22, -14, 44, 28);
+            ctx.strokeRect(-22, -14, 44, 28);
+            ctx.shadowBlur = 0;
+            ctx.font = '14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(tm.icon, 0, -1);
+            ctx.font = 'bold 7px "Orbitron", monospace';
+            ctx.fillStyle = tm.color;
+            ctx.fillText(tm.label.toUpperCase(), 0, 14);
             ctx.restore();
         });
 
@@ -1908,10 +2150,14 @@ const StraitOfChaos = () => {
                 e.preventDefault();
                 triggerEMP();
             }
+            if (e.code === 'KeyR' && gameStateRef.current === 'PLAYING') {
+                e.preventDefault();
+                triggerPrecisionStrike();
+            }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [pauseGame, resumeGame, startGame, flap, triggerBarrelRoll, triggerEMP]);
+    }, [pauseGame, resumeGame, startGame, flap, triggerBarrelRoll, triggerEMP, triggerPrecisionStrike]);
 
     const handleCanvasInteraction = (e) => {
         e.preventDefault();
@@ -2090,6 +2336,11 @@ const StraitOfChaos = () => {
         .soc-faction.active-iran { border-color: #22C55E; background: rgba(34,197,94,0.1); box-shadow: inset 0 0 15px rgba(34,197,94,0.1); }
         .soc-faction-emoji { font-size: 32px; display: block; margin-bottom: 4px; filter: drop-shadow(0 0 8px rgba(255,255,255,0.2)); }
         .soc-faction-name { font-family: 'Orbitron', sans-serif; font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+        .soc-loadout-list { margin-top: 10px; border: 1px solid rgba(148,163,184,0.25); border-radius: 10px; overflow: hidden; }
+        .soc-loadout-row { display: grid; grid-template-columns: 1.25fr 1.6fr; gap: 8px; padding: 9px 10px; background: rgba(15,23,42,0.35); border-bottom: 1px solid rgba(148,163,184,0.16); text-align: left; }
+        .soc-loadout-row:last-child { border-bottom: none; }
+        .soc-loadout-tier { font-family: 'Orbitron', sans-serif; color: #E2E8F0; font-size: 10px; letter-spacing: 0.6px; }
+        .soc-loadout-model { font-family: 'Inter', sans-serif; color: #F8FAFC; font-size: 11px; font-weight: 600; }
 
         .soc-difficulty-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
         .soc-difficulty { border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #d1d5db; padding: 12px 8px; text-align: center; transition: all 0.2s; cursor: pointer; }
@@ -2189,6 +2440,12 @@ const StraitOfChaos = () => {
                         <div className="soc-run-upgrade">
                             {runMetaRef.current.mode === 'DAILY' ? `Daily ${runMetaRef.current.dailyDateKey}` : 'Classic'} • {RUN_MODIFIERS[runMetaRef.current.modifier]?.label || 'Standard'}
                         </div>
+                        <div className="soc-run-upgrade">
+                            Drone: {DRONE_TIER_LOADOUT[Math.min(scoreTier, DRONE_TIER_LOADOUT.length - 1)].model}
+                        </div>
+                        <div className="soc-run-upgrade">
+                            Strike Hits: {strikeRef.current.totalHits}
+                        </div>
                     </div>
                 )}
                 {gameState === 'PLAYING' && tutorialUi.active && (
@@ -2232,6 +2489,17 @@ const StraitOfChaos = () => {
                             transition: 'all 0.1s active', transform: 'scale(1)',
                         }}>
                             🔄
+                        </div>
+                        <div onClick={(e) => { e.stopPropagation(); triggerPrecisionStrike(); }} style={{
+                            position: 'absolute', bottom: '66px', left: '50%', transform: 'translateX(-50%)', zIndex: 20, width: '56px', height: '56px',
+                            borderRadius: '50%', background: (strikeRef.current.charge >= strikeRef.current.maxCharge && strikeRef.current.cooldown <= 0) ? 'rgba(251,146,60,0.3)' : 'rgba(0,0,0,0.55)',
+                            border: `2px solid ${(strikeRef.current.charge >= strikeRef.current.maxCharge && strikeRef.current.cooldown <= 0) ? '#FB923C' : 'rgba(100,100,100,0.35)'}`,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                            fontSize: '24px', pointerEvents: 'auto', WebkitTapHighlightColor: 'transparent',
+                            boxShadow: (strikeRef.current.charge >= strikeRef.current.maxCharge && strikeRef.current.cooldown <= 0) ? '0 0 24px rgba(251,146,60,0.45)' : 'none',
+                            opacity: strikeRef.current.cooldown > 0 ? 0.6 : 1,
+                        }}>
+                            🎯
                         </div>
                         <div onClick={(e) => { e.stopPropagation(); triggerEMP(); }} style={{
                             position: 'absolute', bottom: '60px', right: '20px', zIndex: 20, width: '64px', height: '64px',
@@ -2285,6 +2553,19 @@ const StraitOfChaos = () => {
                                                 <div className="soc-faction-name">IRAN</div>
                                             </div>
                                         </div>
+                                        {f && (
+                                            <>
+                                                <div className="soc-section-title" style={{ marginTop: '8px' }}>{f.name} Drone Ladder</div>
+                                                <div className="soc-loadout-list">
+                                                    {DRONE_TIER_LOADOUT.map((entry) => (
+                                                        <div className="soc-loadout-row" key={`${f.name}-${entry.tier}`}>
+                                                            <span className="soc-loadout-tier">Tier {entry.tier}: {entry.role}</span>
+                                                            <span className="soc-loadout-model">{entry.model}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </>
+                                        )}
 
                                         <div className="soc-section-title">Choose Difficulty</div>
                                         <div className="soc-difficulty-row">
@@ -2455,7 +2736,8 @@ const StraitOfChaos = () => {
                                             <div className="soc-intel-content">
                                                 <h4>Advance Maneuvers</h4>
                                                 <p><strong style={{ color: '#00CCCC' }}>Barrel Roll (S):</strong> Phase through threats.<br />
-                                                    <strong style={{ color: '#00CCCC' }}>EMP (E):</strong> Clear local airspace.</p>
+                                                    <strong style={{ color: '#00CCCC' }}>EMP (E):</strong> Clear local airspace.<br />
+                                                    <strong style={{ color: '#FB923C' }}>Precision Strike (R):</strong> Blast oil shipment areas, depots, and nearby hostiles.</p>
                                             </div>
                                         </div>
                                     </>
