@@ -531,6 +531,7 @@ const StraitOfChaos = () => {
         charge: 0, maxCharge: 6, cooldown: 0, blastTimer: 0, blastX: 0, blastY: 0, report: '', reportTimer: 0, totalHits: 0,
         blastRadius: 175, cooldownBase: 210, spawnEvery: 420, minSpawnScore: 6, targetSpeedMult: 1, chargePerClear: 1, chargePerOil: 2, rewardMult: 1,
     });
+    const shakeRef = useRef(0);
     const touchStartRef = useRef({ y: 0, time: 0 });
     const isHoldingRef = useRef(false);
 
@@ -728,6 +729,7 @@ const StraitOfChaos = () => {
         setConfirmRestart(false);
         setTutorialUi({ active: false, stepIndex: 0, remainingFrames: TUTORIAL_TOTAL_FRAMES, flapCount: 0 });
         setDeathReport({ label: '', tip: '' });
+        shakeRef.current = 0;
         setScore(0); setShowShareModal(false); setCopied(false); setGameState('START');
     }, [isChallenge, isDifficultyLocked]);
 
@@ -916,16 +918,23 @@ const StraitOfChaos = () => {
             addFloatingText(strike.blastX, strike.blastY - 24, `+$${fundsEarned}`, '#FFD700');
         }
 
-        strike.totalHits += destroyed;
-        strike.report = destroyed > 0 ? `STRIKE CONFIRMED: ${destroyed} TARGETS` : 'STRIKE MISSED: NO LOCK';
+        if (destroyed > 0) {
+            shakeRef.current = 15 + Math.min(20, destroyed * 5);
+            strike.totalHits += destroyed;
+            strike.report = `🎯 STRIKE CONFIRMED: ${destroyed} ASSETS NEUTRALIZED`;
+        } else {
+            strike.report = '⚠️ STRIKE MISSED: NO CONFIRMED HITS';
+        }
+        
         strike.reportTimer = 180;
-
         activeHeadlinesRef.current.push(
             destroyed > 0
-                ? `🎯 Precision strike neutralized ${destroyed} hostile assets near shipping lanes`
-                : '⚠️ Precision strike expended with no confirmed target damage'
+                ? `🎯 [BREAKING] Precision strike neutralized ${destroyed} hostile assets near critical shipping lanes`
+                : '⚠️ [URGENT] Strategic asset strike failed to neutralize targets — regional tension rising'
         );
-        createParticles(strike.blastX, strike.blastY, '#00FFFF', 30);
+
+        createParticles(strike.blastX, strike.blastY, '#00FFFF', 40);
+        createParticles(strike.blastX, strike.blastY, '#FFB020', 25);
     }, []);
 
     const addTouchRipple = (cx, cy) => {
@@ -1475,6 +1484,7 @@ const StraitOfChaos = () => {
         if (strikeRef.current.cooldown > 0) strikeRef.current.cooldown--;
         if (strikeRef.current.reportTimer > 0) strikeRef.current.reportTimer--;
         if (milestoneToastRef.current.timer > 0) milestoneToastRef.current.timer--;
+        if (shakeRef.current > 0) shakeRef.current--;
         // Dynamic BGM intensity by score phase
         if (bgmRef.current) {
             const phaseTier = scoreRef.current >= 25 ? 3 : scoreRef.current >= 15 ? 2 : scoreRef.current >= 6 ? 1 : 0;
@@ -1491,11 +1501,18 @@ const StraitOfChaos = () => {
     const draw = useCallback(() => {
         const canvas = canvasRef.current; if (!canvas) return;
         const ctx = canvas.getContext('2d');
+        ctx.save();
+        if (shakeRef.current > 0) {
+            const s = shakeRef.current;
+            ctx.translate((visualRandom() - 0.5) * s, (visualRandom() - 0.5) * s);
+        }
         const W = CONFIG.INTERNAL_WIDTH, H = CONFIG.INTERNAL_HEIGHT;
         const phase = getEscalationPhase(scoreRef.current);
         const f = factionRef.current || FACTIONS.USA;
         const accessibilityPrefs = accessibilityRef.current;
         const dangerColor = accessibilityPrefs.highContrast ? '#FFFFFF' : '#EF4444';
+        const tier = progressionRef.current.tier;
+        const strikeReady = strikeRef.current.charge >= strikeRef.current.maxCharge && strikeRef.current.cooldown <= 0;
 
         // Background
         if (bgImageRef.current) {
@@ -1648,67 +1665,173 @@ const StraitOfChaos = () => {
             ctx.arc(0, 0, bird.radius + 16, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
         }
 
-        // --- DETAILED DRONE ---
+        // --- DYNAMIC DRONE RENDERING ---
         const s = droneScale;
         ctx.shadowBlur = 15; ctx.shadowColor = f.color;
 
-        // Main body (center fuselage)
-        ctx.fillStyle = '#2A2A3E';
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 12 * s, 6 * s, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = f.color; ctx.lineWidth = 1; ctx.stroke();
-
-        // Arms (4 diagonal arms extending outward)
-        ctx.strokeStyle = '#555'; ctx.lineWidth = 2.5 * s;
-        const armLen = 14 * s;
-        const armPositions = [
-            [-armLen, -armLen * 0.7], [armLen, -armLen * 0.7],
-            [-armLen, armLen * 0.7], [armLen, armLen * 0.7],
-        ];
-        armPositions.forEach(([ax, ay]) => {
-            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ax, ay); ctx.stroke();
-        });
-
-        // Motor housings (circles at arm ends)
-        armPositions.forEach(([ax, ay]) => {
+        if (tier === 0) {
+            // Tier 0: Black Hornet 4 (Micro Tactical)
             ctx.fillStyle = '#1A1A2E';
-            ctx.beginPath(); ctx.arc(ax, ay, 4 * s, 0, Math.PI * 2); ctx.fill();
-            ctx.strokeStyle = f.alt; ctx.lineWidth = 1; ctx.stroke();
-        });
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 8 * s, 4 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = f.color; ctx.lineWidth = 1; ctx.stroke();
+            
+            const pa = bird.propAngle;
+            [[-7 * s, 0], [7 * s, 0]].forEach(([ax, ay], idx) => {
+                const angle = pa + idx * Math.PI;
+                ctx.strokeStyle = f.color; ctx.lineWidth = 1;
+                const propR = 5 * s;
+                ctx.beginPath();
+                ctx.moveTo(ax + Math.cos(angle) * propR, ay + Math.sin(angle) * propR);
+                ctx.lineTo(ax - Math.cos(angle) * propR, ay - Math.sin(angle) * propR);
+                ctx.stroke();
+            });
+            ctx.fillStyle = '#EF4444';
+            ctx.beginPath(); ctx.arc(7 * s, 0, 1.5 * s, 0, Math.PI * 2); ctx.fill();
+        } else if (tier === 1) {
+            // Tier 1: LUCAS (Tactical Quadcopter)
+            ctx.fillStyle = '#2A2A3E';
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 12 * s, 6 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = f.color; ctx.lineWidth = 1; ctx.stroke();
 
-        // Spinning propellers
-        const pa = bird.propAngle;
-        armPositions.forEach(([ax, ay], idx) => {
-            const angle = pa + idx * Math.PI / 2;
-            ctx.strokeStyle = `rgba(${f.color === '#3B82F6' ? '59,130,246' : '34,197,94'},0.7)`;
-            ctx.lineWidth = 1.5;
-            const propR = 7 * s;
-            ctx.beginPath();
-            ctx.moveTo(ax + Math.cos(angle) * propR, ay + Math.sin(angle) * propR);
-            ctx.lineTo(ax - Math.cos(angle) * propR, ay - Math.sin(angle) * propR);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(ax + Math.cos(angle + Math.PI / 2) * propR, ay + Math.sin(angle + Math.PI / 2) * propR);
-            ctx.lineTo(ax - Math.cos(angle + Math.PI / 2) * propR, ay - Math.sin(angle + Math.PI / 2) * propR);
-            ctx.stroke();
-            // Prop circle blur
-            ctx.globalAlpha = 0.15;
+            ctx.strokeStyle = '#555'; ctx.lineWidth = 2.5 * s;
+            const armLen = 14 * s;
+            const armPositions = [
+                [-armLen, -armLen * 0.7], [armLen, -armLen * 0.7],
+                [-armLen, armLen * 0.7], [armLen, armLen * 0.7],
+            ];
+            armPositions.forEach(([ax, ay]) => {
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ax, ay); ctx.stroke();
+            });
+
+            const pa = bird.propAngle;
+            armPositions.forEach(([ax, ay], idx) => {
+                const angle = pa + idx * Math.PI / 2;
+                ctx.strokeStyle = `rgba(${f.color === '#3B82F6' ? '59,130,246' : '34,197,94'},0.7)`;
+                ctx.lineWidth = 1.5;
+                const propR = 7 * s;
+                ctx.beginPath();
+                ctx.moveTo(ax + Math.cos(angle) * propR, ay + Math.sin(angle) * propR);
+                ctx.lineTo(ax - Math.cos(angle) * propR, ay - Math.sin(angle) * propR);
+                ctx.stroke();
+            });
             ctx.fillStyle = f.color;
-            ctx.beginPath(); ctx.arc(ax, ay, propR, 0, Math.PI * 2); ctx.fill();
-            ctx.globalAlpha = 1;
-        });
+            ctx.beginPath(); ctx.arc(0, 0, 2.5 * s, 0, Math.PI * 2); ctx.fill();
+        } else if (tier === 2) {
+            // Tier 2: MQ-9 Reaper (Strike Fixed-Wing)
+            ctx.fillStyle = '#333344';
+            ctx.beginPath();
+            ctx.moveTo(-15 * s, -3 * s);
+            ctx.lineTo(15 * s, -2 * s);
+            ctx.lineTo(18 * s, 0);
+            ctx.lineTo(15 * s, 2 * s);
+            ctx.lineTo(-15 * s, 3 * s);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = f.color; ctx.lineWidth = 1; ctx.stroke();
 
-        // Camera/sensor (front dot)
-        ctx.fillStyle = '#EF4444';
-        ctx.beginPath(); ctx.arc(10 * s, 0, 2 * s, 0, Math.PI * 2); ctx.fill();
-        // Center LED
-        ctx.fillStyle = f.color;
-        ctx.beginPath(); ctx.arc(0, 0, 2.5 * s, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#222233';
+            ctx.beginPath();
+            ctx.moveTo(0, 0); ctx.lineTo(-5 * s, -22 * s); ctx.lineTo(2 * s, -22 * s); ctx.lineTo(5 * s, 0); ctx.closePath(); ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(0, 0); ctx.lineTo(-5 * s, 22 * s); ctx.lineTo(2 * s, 22 * s); ctx.lineTo(5 * s, 0); ctx.closePath(); ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(-12 * s, 0); ctx.lineTo(-18 * s, -8 * s);
+            ctx.moveTo(-12 * s, 0); ctx.lineTo(-18 * s, 8 * s);
+            ctx.stroke();
+
+            const pa = bird.propAngle;
+            ctx.strokeStyle = f.color; ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-16 * s + Math.cos(pa) * 6 * s, Math.sin(pa) * 6 * s);
+            ctx.lineTo(-16 * s - Math.cos(pa) * 6 * s, -Math.sin(pa) * 6 * s);
+            ctx.stroke();
+        } else if (tier === 3) {
+            // Tier 3: YFQ-44A Stealth (Anduril Wingman)
+            ctx.fillStyle = '#111122';
+            ctx.beginPath();
+            ctx.moveTo(20 * s, 0);
+            ctx.lineTo(-15 * s, -18 * s);
+            ctx.lineTo(-10 * s, 0);
+            ctx.lineTo(-15 * s, 18 * s);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = f.color; ctx.lineWidth = 1.5; ctx.stroke();
+
+            const engineGlow = 0.5 + Math.sin(frameCountRef.current * 0.2) * 0.3;
+            ctx.shadowBlur = 10; ctx.shadowColor = '#00FFFF';
+            ctx.fillStyle = `rgba(0, 255, 255, ${engineGlow})`;
+            ctx.beginPath();
+            ctx.ellipse(-12 * s, 0, 4 * s, 2 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = f.color;
+            ctx.fillRect(8 * s, -1 * s, 6 * s, 2 * s);
+        } else {
+            // Tier 4+: RQ-4 Global Hawk (Strategic)
+            ctx.fillStyle = '#444455';
+            ctx.beginPath();
+            ctx.ellipse(10 * s, 0, 10 * s, 6 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(5 * s, 3 * s);
+            ctx.lineTo(-20 * s, 1 * s);
+            ctx.lineTo(-20 * s, -1 * s);
+            ctx.lineTo(5 * s, -3 * s);
+            ctx.fill();
+            ctx.strokeStyle = f.color; ctx.lineWidth = 1; ctx.stroke();
+
+            ctx.lineWidth = 3 * s; ctx.strokeStyle = '#333344';
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-2 * s, -32 * s); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-2 * s, 32 * s); ctx.stroke();
+
+            ctx.lineWidth = 2 * s;
+            ctx.beginPath(); ctx.moveTo(-18 * s, 0); ctx.lineTo(-24 * s, -10 * s); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(-18 * s, 0); ctx.lineTo(-24 * s, 10 * s); ctx.stroke();
+            
+            ctx.fillStyle = '#222';
+            ctx.beginPath(); ctx.ellipse(5 * s, 4 * s, 6 * s, 3 * s, 0, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // --- TARGET LOCKING RETICLE ---
+        if (strikeReady) {
+            strikeTargetsRef.current.forEach(t => {
+                const dx = t.x - bird.x;
+                const dy = t.y - bird.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 320 && dx > 0) {
+                    ctx.save();
+                    ctx.translate(t.x, t.y);
+                    ctx.strokeStyle = '#FFB020';
+                    ctx.lineWidth = 2;
+                    ctx.shadowBlur = 10; ctx.shadowColor = '#FFB020';
+                    
+                    for(let i=0; i<4; i++) {
+                        ctx.rotate(Math.PI / 2);
+                        ctx.beginPath();
+                        ctx.moveTo(15, 25); ctx.lineTo(25, 25); ctx.lineTo(25, 15);
+                        ctx.stroke();
+                    }
+                    
+                    ctx.font = '900 8px "Orbitron", sans-serif';
+                    ctx.fillStyle = '#FFB020';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('LOCK_ACQUIRED', 0, -32);
+                    
+                    const pulse = Math.sin(frameCountRef.current * 0.2) * 0.5 + 0.5;
+                    ctx.globalAlpha = pulse;
+                    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+                    ctx.restore();
+                }
+            });
+        }
 
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
         ctx.restore();
+
 
         // --- BARREL ROLL COOLDOWN RING ---
         if (barrelRollRef.current.cooldown > 0 && !barrelRollRef.current.active) {
@@ -1771,7 +1894,6 @@ const StraitOfChaos = () => {
         ctx.fillStyle = '#333';
         ctx.fillRect(strikeX, strikeY, strikeBarW, strikeBarH);
         const strikePct = strikeData.charge / strikeData.maxCharge;
-        const strikeReady = strikeData.charge >= strikeData.maxCharge && strikeData.cooldown <= 0;
         ctx.fillStyle = strikeReady ? '#FFB020' : '#A16207';
         ctx.fillRect(strikeX, strikeY, strikeBarW * strikePct, strikeBarH);
         if (strikeReady) {
@@ -1957,7 +2079,6 @@ const StraitOfChaos = () => {
         if (purchased.includes('TACTICAL_CAPACITOR')) activeSystems.push({ icon: '⚡', label: 'CAPACITOR' });
         if (purchased.includes('REFINED_FUEL')) activeSystems.push({ icon: '🛢️', label: 'FUEL' });
 
-        const tier = progressionRef.current.tier;
         for (let i = 0; i < tier; i++) {
             const up = MILESTONE_UPGRADES[i];
             activeSystems.push({ icon: up.icon, label: up.name.split(' ')[0].toUpperCase() });
@@ -2107,6 +2228,7 @@ const StraitOfChaos = () => {
             ctx.fillText(line.trim(), W / 2, ly);
             ctx.globalAlpha = 1;
         }
+        ctx.restore(); // End shake/main draw
     }, []);
 
     // Game loop
@@ -2737,7 +2859,7 @@ const StraitOfChaos = () => {
                                                 <h4>Advance Maneuvers</h4>
                                                 <p><strong style={{ color: '#00CCCC' }}>Barrel Roll (S):</strong> Phase through threats.<br />
                                                     <strong style={{ color: '#00CCCC' }}>EMP (E):</strong> Clear local airspace.<br />
-                                                    <strong style={{ color: '#FB923C' }}>Precision Strike (R):</strong> Blast oil shipment areas, depots, and nearby hostiles.</p>
+                                                    <strong style={{ color: '#FB923C' }}>Precision Strike (R):</strong> Deliver a devastating blast to oil shipments, port depots, and nearby hostiles. Earns massive funds on hit.</p>
                                             </div>
                                         </div>
                                     </>
